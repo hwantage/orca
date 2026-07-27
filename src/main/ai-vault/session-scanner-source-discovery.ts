@@ -50,6 +50,9 @@ export function claudeProjectsRootDirs(args: {
   ]
 }
 
+/**
+ * Main discovery entry point that scans all supported AI agent session sources.
+ */
 export async function discoverAiVaultSessionSources(args: {
   options: AiVaultScanOptions
   limitPerAgent: number
@@ -277,6 +280,9 @@ function openClawDiscovery(
   })
 }
 
+/**
+ * Filters and removes duplicate or empty WSL home directory paths.
+ */
 function normalizedWslHomeDirs(homeDirs: readonly string[] | undefined): string[] {
   const seen = new Set<string>()
   const unique: string[] = []
