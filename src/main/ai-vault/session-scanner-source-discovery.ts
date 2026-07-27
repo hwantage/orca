@@ -7,7 +7,7 @@ import { discoverFiles, discoverOpenClawFiles } from './session-scanner-discover
 import { droidDiscoveries, kimiDiscoveries } from './session-scanner-droid-kimi-sources'
 import { opencodeDiscoveries } from './session-scanner-opencode-sources'
 import type { AiVaultScanOptions, SessionFileDiscovery } from './session-scanner-types'
-import { normalizeAgentSessionsDir } from './session-scanner-values'
+import { normalizeAgentSessionsDir, sessionRootDirs } from './session-scanner-values'
 import { resolveGrokSessionsDir } from '../../shared/grok-session-paths'
 import { antigravityDiscoveries } from './session-scanner-antigravity-sources'
 import { hermesDiscoveries } from './session-scanner-hermes-sources'
@@ -289,12 +289,4 @@ function normalizedWslHomeDirs(homeDirs: readonly string[] | undefined): string[
     unique.push(trimmed)
   }
   return unique
-}
-
-function sessionRootDirs(
-  hostRootDir: string,
-  wslHomeDirs: readonly string[],
-  segments: readonly string[]
-): string[] {
-  return [hostRootDir, ...wslHomeDirs.map((homeDir) => join(homeDir, ...segments))]
 }

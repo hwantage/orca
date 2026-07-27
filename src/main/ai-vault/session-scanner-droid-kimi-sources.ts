@@ -4,6 +4,7 @@ import type { AiVaultScanIssue } from '../../shared/ai-vault-types'
 import { discoverFiles } from './session-scanner-discovery'
 import { resolveKimiSessionsDir } from './session-scanner-kimi-paths'
 import type { AiVaultScanOptions, SessionFileDiscovery } from './session-scanner-types'
+import { sessionRootDirs } from './session-scanner-values'
 
 const DROID_SESSIONS_DIR = join(homedir(), '.factory', 'sessions')
 
@@ -50,12 +51,4 @@ export function kimiDiscoveries(
         basename(path) === 'state.json' && basename(dirname(path)).startsWith('session_')
     })
   )
-}
-
-function sessionRootDirs(
-  hostRootDir: string,
-  wslHomeDirs: readonly string[],
-  segments: readonly string[]
-): string[] {
-  return [hostRootDir, ...wslHomeDirs.map((homeDir) => join(homeDir, ...segments))]
 }
