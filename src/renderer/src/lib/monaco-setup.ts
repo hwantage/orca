@@ -9,6 +9,7 @@ import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker'
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 import { registerAstroLanguage } from './monaco-languages/register-astro'
 import { registerJsonlLanguage } from './monaco-languages/register-jsonl'
+import { registerJspLanguage } from './monaco-languages/register-jsp'
 import { registerNimLanguage } from './monaco-languages/register-nim'
 import { registerSvelteLanguage } from './monaco-languages/register-svelte'
 import { registerVueLanguage } from './monaco-languages/register-vue'
@@ -79,6 +80,7 @@ registerSvelteLanguage(monaco)
 registerAstroLanguage(monaco)
 registerNimLanguage(monaco)
 registerJsonlLanguage(monaco)
+registerJspLanguage(monaco)
 installMonacoDelayerCancellationGuard()
 installMonacoDiffEditorDisposalGuard(monaco)
 installMonacoPeekReferencesPreviewOptions()
