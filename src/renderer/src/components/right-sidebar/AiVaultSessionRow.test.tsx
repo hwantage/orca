@@ -147,7 +147,6 @@ describe('VaultSessionRow', () => {
   it('preserves agent metadata line (agent name and icon) when expanded', () => {
     const markup = renderRowStatic(true)
 
-    // Why: users need to identify which AI agent handled the session even when expanded
     expect(markup).toContain('Fix AI Vault keep header on expand')
     expect(markup).toContain('Codex')
     expect(markup).toContain('5 msgs')
