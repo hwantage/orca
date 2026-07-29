@@ -31,6 +31,7 @@ globalThis.MonacoEnvironment = {
       case 'html':
       case 'handlebars':
       case 'razor':
+      case 'jsp':
         return new htmlWorker()
       case 'typescript':
       case 'javascript':
