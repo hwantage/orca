@@ -58,6 +58,34 @@ describe('useFileExplorerAutoReveal', () => {
     expect(setSelectedPath).toHaveBeenCalledWith('/repo/wt/src/index.ts')
   })
 
+  it('triggers auto-reveal for markdown-preview tabs', () => {
+    const setSelectedPath = vi.fn()
+    const openFiles: OpenFile[] = [
+      {
+        id: 'markdown-preview-1',
+        filePath: '/repo/wt/docs/README.md',
+        relativePath: 'docs/README.md',
+        worktreeId: 'wt-1',
+        language: 'markdown',
+        isDirty: false,
+        mode: 'markdown-preview'
+      }
+    ]
+    const projection = mockProjection(true, 3)
+
+    renderHook(() =>
+      useFileExplorerAutoReveal({
+        ...defaultParams,
+        activeFileId: 'markdown-preview-1',
+        openFiles,
+        rowProjection: projection,
+        setSelectedPath
+      })
+    )
+
+    expect(setSelectedPath).toHaveBeenCalledWith('/repo/wt/docs/README.md')
+  })
+
   it('triggers auto-reveal for unstaged working-tree diff tabs', () => {
     const setSelectedPath = vi.fn()
     const openFiles: OpenFile[] = [
