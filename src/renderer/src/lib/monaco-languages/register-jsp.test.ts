@@ -65,6 +65,43 @@ function matchLengthFor(state: string, source: string): number | undefined {
   return regexp.exec(source)?.[0].length
 }
 
+function endingStateFor(source: string): string {
+  const states = ['root']
+  let remaining = source
+
+  while (remaining) {
+    const state = states.at(-1)
+    if (!state) {
+      throw new Error('Tokenizer state stack is empty')
+    }
+    const rule = findRule(state, remaining)
+    if (!rule) {
+      remaining = remaining.slice(1)
+      continue
+    }
+
+    const [, action, shortcut] = rule
+    const next = (
+      typeof action === 'object' ? (action.next ?? action.switchTo) : shortcut
+    )?.replace(/^@/, '')
+    const matchLength = matchLengthFor(state, remaining)
+    if (!matchLength) {
+      throw new Error(`Tokenizer rule made no progress in ${state}`)
+    }
+    remaining = remaining.slice(matchLength)
+
+    if (next === 'popall') {
+      states.splice(1)
+    } else if (next === 'pop') {
+      states.pop()
+    } else if (next) {
+      states.push(next)
+    }
+  }
+
+  return states.at(-1) ?? 'root'
+}
+
 describe('registerJspLanguage', () => {
   it('registers the jsp language and attaches the HTML language service once', () => {
     const languages: { id: string }[] = [{ id: 'html' }]
@@ -171,6 +208,15 @@ describe('registerJspLanguage', () => {
     // finds the closing delimiter first, so the comment must stop there.
     expect(matchLengthFor('jspScriptlet', '// done %>')).toBe(8)
     expect(matchLengthFor('javaBlockComment', ' note %> */')).toBe(6)
+    expect(nextStateFor('javaBlockComment', '%> */')).toBe('popall')
+    expect(endingStateFor('<% /* comment %> */')).toBe('root')
+  })
+
+  it('does not let Java literals swallow the scriptlet terminator', () => {
+    // JSP closes before Java can parse a literal.
+    expect(matchLengthFor('jspScriptlet', '"%>"; %>')).toBe(1)
+    expect(matchLengthFor('jspScriptlet', "'%>'; %>")).toBe(1)
+    expect(matchLengthFor('jspScriptlet', '"%\\>"')).toBe(5)
   })
 
   it('keeps scriptlet-looking text inert inside a JSP comment', () => {
@@ -192,6 +238,39 @@ describe('registerJspLanguage', () => {
     expect(tokenFor('jspScriptlet', 'IF (x)')).toBe('identifier')
     expect(nextStateFor('root', '<SCRIPT type="text/javascript">')).toBe('scriptOpen')
     expect(nextStateFor('root', '<STYLE>')).toBe('styleOpen')
+  })
+
+  it('recognizes common Java collection, utility and boxed types', () => {
+    const commonTypes = [
+      'ArrayList',
+      'LinkedList',
+      'HashMap',
+      'LinkedHashMap',
+      'HashSet',
+      'LinkedHashSet',
+      'TreeMap',
+      'TreeSet',
+      'Set',
+      'Iterator',
+      'Optional',
+      'StringBuilder',
+      'BigDecimal',
+      'BigInteger',
+      'Integer',
+      'Long',
+      'Double',
+      'Boolean',
+      'Short',
+      'Byte',
+      'Float',
+      'Character',
+      'Void'
+    ]
+
+    commonTypes.forEach((type) => {
+      expect(tokenFor('jspScriptlet', `${type} value`)).toBe('type')
+    })
+    expect(tokenFor('jspScriptlet', 'arrayList = null')).toBe('identifier')
   })
 
   it('pops the embedded language when the script or style block closes', () => {

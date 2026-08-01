@@ -59,14 +59,18 @@ export const jspMonarchLanguage: Monaco.languages.IMonarchLanguage = {
       [/%>/, 'metatag', '@pop'],
       [/\/\/(?:(?!%>)[^\n])*/, 'comment'],
       [/\/\*/, 'comment', '@javaBlockComment'],
-      [/"([^"\\]|\\.)*"/, 'string'],
-      [/'([^'\\]|\\.)*'/, 'string'],
+      // JSP closes scriptlets before parsing Java, including inside literals.
+      [/"(?:(?!%>)(?:[^"\\]|\\.))*(?:"|(?=%>))/, 'string'],
+      [/'(?:(?!%>)(?:[^'\\]|\\.))*(?:'|(?=%>))/, 'string'],
       [/\b(?:true|false|null)\b/, 'constant'],
       [
         /\b(?:if|else|for|while|do|switch|case|default|break|continue|return|try|catch|finally|throw|throws|new|instanceof|import|package|class|interface|enum|extends|implements|public|private|protected|static|final|abstract|synchronized|assert|this|super)\b/,
         'keyword'
       ],
-      [/\b(?:int|long|short|byte|float|double|boolean|char|void|String|Object|List|Map)\b/, 'type'],
+      [
+        /\b(?:int|long|short|byte|float|double|boolean|char|void|String|Object|List|Map|Set|Iterator|Optional|ArrayList|LinkedList|HashMap|LinkedHashMap|HashSet|LinkedHashSet|TreeMap|TreeSet|StringBuilder|BigDecimal|BigInteger|Integer|Long|Double|Boolean|Short|Byte|Float|Character|Void)\b/,
+        'type'
+      ],
       [/\d[\d_]*\.?[\d_]*(?:[eE][-+]?\d+)?[fFdDlL]?/, 'number'],
       [/[{}()[\]]/, '@brackets'],
       // Why: `%` is split out with a lookahead so a run like `i++%>` cannot
@@ -78,6 +82,7 @@ export const jspMonarchLanguage: Monaco.languages.IMonarchLanguage = {
     ],
 
     javaBlockComment: [
+      [/%>/, 'metatag', '@popall'],
       [/\*\//, 'comment', '@pop'],
       [/(?:(?!%>)[^*])+/, 'comment'],
       [/./, 'comment']
