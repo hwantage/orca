@@ -1,42 +1,14 @@
 // @vitest-environment happy-dom
 
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { AiVaultSession } from '../../../../shared/ai-vault-types'
+import type { AiVaultSessionWorktreeInfo } from './ai-vault-session-worktree'
 import { VaultSessionRow } from './AiVaultSessionRow'
 
-beforeEach(() => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test-only window.api shim
-  ;(window as any).api = {
-    aiVault: {
-      listSubagentSessions: vi.fn(),
-      getFirstUserPrompt: vi.fn()
-    },
-    shell: { openFilePath: vi.fn() }
-  }
-})
-
-const dummySession: AiVaultSession = {
-  id: 'session-123',
-  sessionId: 'session-123',
-  agent: 'codex',
-  title: 'Fix AI Vault keep header on expand',
-  updatedAt: '2026-07-27T10:00:00.000Z',
-  modifiedAt: '2026-07-27T10:00:00.000Z',
-  messageCount: 5,
-  subagentTranscriptCount: 0,
-  executionHostId: 'local',
-  filePath: '/path/to/session.json',
-  previewMessages: [
-    { role: 'user', text: 'Hello AI' },
-    { role: 'assistant', text: 'Hello User' }
-  ]
-}
-
-const testingLibrarySession = {
+const session = {
   id: 'local:gemini:sess-1:/home/a/.gemini/s.json',
   executionHostId: 'local',
   agent: 'gemini',
@@ -52,29 +24,61 @@ const testingLibrarySession = {
   modifiedAt: 0,
   messageCount: 2,
   totalTokens: 0,
-  previewMessages: [],
+  previewMessages: [{ role: 'assistant', text: 'Ready when you are' }],
   queuedMessageCount: 0,
   subagentTranscriptCount: 0,
   resumeCommand: 'gemini --resume sess-1',
   subagent: null
 } as unknown as AiVaultSession
 
-function renderRowStatic(detailsExpanded: boolean): string {
-  return renderToStaticMarkup(
+const worktreeInfo: AiVaultSessionWorktreeInfo = {
+  status: 'active',
+  label: 'feature-branch',
+  path: '/home/a/worktrees/feature-branch'
+}
+
+beforeEach(() => {
+  // The expanded details panel reads these while rendering (first-prompt card)
+  // and on mount (subagent list), so the row cannot expand without them.
+  ;(window as unknown as { api: unknown }).api = {
+    aiVault: {
+      getFirstUserPrompt: vi.fn().mockResolvedValue({ prompt: null }),
+      listSubagentSessions: vi.fn().mockResolvedValue({ sessions: [] })
+    }
+  }
+})
+
+afterEach(() => {
+  // No `globals: true`, so Testing Library's auto-cleanup never runs and rows
+  // from earlier tests would stay in the document and duplicate every query.
+  cleanup()
+  vi.clearAllMocks()
+  delete (window as unknown as { api?: unknown }).api
+})
+
+function renderRow(
+  overrides: {
+    detailsExpanded?: boolean
+    worktreeInfo?: AiVaultSessionWorktreeInfo | null
+    onToggleDetails?: () => void
+    onRequestDelete?: () => void
+  } = {}
+) {
+  return render(
     <TooltipProvider>
       <VaultSessionRow
-        session={dummySession}
+        session={session}
         liveState={null}
-        resumeStartup={{ command: 'codex resume' }}
-        realHomeResumeStartup={{ command: 'codex resume' }}
-        worktreeInfo={null}
-        vaultScope="workspace"
-        detailsExpanded={detailsExpanded}
+        resumeStartup={{ command: 'gemini --resume sess-1' }}
+        realHomeResumeStartup={{ command: 'gemini --resume sess-1' }}
+        worktreeInfo={overrides.worktreeInfo ?? null}
+        vaultScope="all"
+        detailsExpanded={overrides.detailsExpanded ?? false}
         resumeDisabled={false}
-        onToggleDetails={vi.fn()}
+        onToggleDetails={overrides.onToggleDetails ?? vi.fn()}
         showJumpToWorktree={false}
         onResume={vi.fn()}
-        resumeLabel="Resume"
+        resumeLabel="Resume in New Tab"
         resumeActions={{
           worktree: { worktreeId: null, disabled: true },
           newTab: { worktreeId: null, disabled: true }
@@ -83,48 +87,28 @@ function renderRowStatic(detailsExpanded: boolean): string {
         onResumeInNewTab={vi.fn()}
         onCopyId={vi.fn()}
         onCopyPath={vi.fn()}
-        onRequestDelete={vi.fn()}
+        onRequestDelete={overrides.onRequestDelete ?? vi.fn()}
       />
     </TooltipProvider>
   )
 }
 
-function renderRowTL(handlers: { onToggleDetails: () => void; onRequestDelete?: () => void }) {
-  return render(
-    <TooltipProvider>
-      <VaultSessionRow
-        session={testingLibrarySession}
-        liveState={null}
-        resumeStartup={{ command: 'gemini --resume sess-1' }}
-        realHomeResumeStartup={{ command: 'gemini --resume sess-1' }}
-        worktreeInfo={null}
-        vaultScope="all"
-        detailsExpanded={false}
-        resumeDisabled={false}
-        onToggleDetails={handlers.onToggleDetails}
-        showJumpToWorktree={false}
-        onResume={vi.fn()}
-        resumeLabel="Resume in New Tab"
-        resumeActions={{} as never}
-        onResumeInWorktree={vi.fn()}
-        onResumeInNewTab={vi.fn()}
-        onCopyId={vi.fn()}
-        onCopyPath={vi.fn()}
-        onRequestDelete={handlers.onRequestDelete ?? vi.fn()}
-      />
-    </TooltipProvider>
-  )
+function expectAgentIdentity(): void {
+  const metadata = screen.getByTestId('ai-vault-session-metadata')
+  // AgentIcon is an <svg> for the hand-drawn agents and an <img> for the rest.
+  expect(metadata.querySelector('svg, img')).toBeTruthy()
+  expect(within(metadata).getByText('Gemini')).toBeTruthy()
+  expect(within(metadata).getByText('2 msgs')).toBeTruthy()
 }
-
-afterEach(() => {
-  vi.clearAllMocks()
-})
 
 describe('VaultSessionRow details toggle', () => {
   it('does not expand the row when a menu action is chosen', async () => {
+    // Radix portals the menu out of the row's DOM, but React bubbles its
+    // clicks back through the component tree. Expanding here would leave the
+    // row open behind the confirm dialog, and still open after cancelling.
     const onToggleDetails = vi.fn()
     const onRequestDelete = vi.fn()
-    renderRowTL({ onToggleDetails, onRequestDelete })
+    renderRow({ onToggleDetails, onRequestDelete })
     const user = userEvent.setup()
 
     await user.click(screen.getByTestId('ai-vault-session-more-actions'))
@@ -136,9 +120,12 @@ describe('VaultSessionRow details toggle', () => {
 
   it('still expands when the row itself is clicked', async () => {
     const onToggleDetails = vi.fn()
-    const { container } = renderRowTL({ onToggleDetails })
+    const { container } = renderRow({ onToggleDetails })
     const user = userEvent.setup()
 
+    // The session title: inside the row body, so its click reaches the row's
+    // own handler — the path a user takes to expand a row. Queried first-match
+    // because Radix's asChild trigger repeats the subtree.
     const title = container.querySelector('[title="Drag to resume in a new tab"]')
     expect(title).not.toBeNull()
     await user.click(title as Element)
@@ -147,23 +134,28 @@ describe('VaultSessionRow details toggle', () => {
   })
 })
 
-describe('VaultSessionRow', () => {
-  it('renders agent metadata line when collapsed', () => {
-    const markup = renderRowStatic(false)
+describe('VaultSessionRow agent metadata line', () => {
+  it('shows the agent identity when the row is collapsed', () => {
+    renderRow()
 
-    expect(markup).toContain('Fix AI Vault keep header on expand')
-    expect(markup).toContain('Codex')
-    expect(markup).toContain('5 msgs')
-    expect(markup).toContain('Agent</span><span>: Hello User</span>')
+    expectAgentIdentity()
+    expect(screen.getByText(': Ready when you are')).toBeTruthy()
   })
 
-  it('preserves agent metadata line (agent name and icon) when expanded', () => {
-    const markup = renderRowStatic(true)
+  it('keeps the agent identity visible while the row is expanded', () => {
+    renderRow({ detailsExpanded: true })
 
-    expect(markup).toContain('Fix AI Vault keep header on expand')
-    expect(markup).toContain('Codex')
-    expect(markup).toContain('5 msgs')
-    expect(markup).toContain('id="ai-vault-session-details-session-123"')
-    expect(markup).not.toContain('Agent</span><span>: Hello User</span>')
+    expectAgentIdentity()
+    // The details panel replaces the one-line preview with the full turns.
+    expect(screen.getByText('Latest turns')).toBeTruthy()
+    expect(screen.queryByText(': Ready when you are')).toBeNull()
+  })
+
+  it('renders the worktree badge once when expanded', () => {
+    // The metadata grid already carries the worktree badge, so the row body must
+    // not add a second copy of its own above the details panel.
+    const { container } = renderRow({ detailsExpanded: true, worktreeInfo })
+
+    expect(container.querySelectorAll(`[title="${worktreeInfo.label}"]`)).toHaveLength(1)
   })
 })
