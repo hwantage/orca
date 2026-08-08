@@ -500,6 +500,10 @@ import type {
   OpenCodeUsageSummary
 } from '../shared/opencode-usage-types'
 import type {
+  AiVaultDeleteSessionArgs,
+  AiVaultDeleteSessionResult
+} from '../shared/ai-vault-session-deletion'
+import type {
   AiVaultFirstUserPromptArgs,
   AiVaultFirstUserPromptResult,
   AiVaultListArgs,
@@ -923,6 +927,8 @@ export type AiVaultApi = {
   listSubagentSessions: (args: AiVaultSubagentListArgs) => Promise<AiVaultSubagentListResult>
   /** Full first user prompt for copy/reuse (re-parses one transcript). */
   getFirstUserPrompt: (args: AiVaultFirstUserPromptArgs) => Promise<AiVaultFirstUserPromptResult>
+  /** Moves a deletable session's transcript to the OS trash; local sessions only. */
+  deleteSession: (args: AiVaultDeleteSessionArgs) => Promise<AiVaultDeleteSessionResult>
   /** Fires when any app window regains OS focus; returns an unsubscribe. */
   onWindowFocused: (callback: () => void) => () => void
 }
@@ -3678,7 +3684,8 @@ export type PreloadApi = {
           qrDataUrl: string | null
           qrError?: 'encoding_failed'
           pairingUrl: string
-          endpoint: string
+          /** Null when no direct address was advertised — the QR pairs over Relay alone. */
+          endpoint: string | null
           deviceId: string
           /** Mode the QR actually encodes. */
           connectionMode: MobilePairingConnectionMode
