@@ -1,10 +1,23 @@
+// @vitest-environment happy-dom
+
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { AiVaultSession } from '../../../../shared/ai-vault-types'
 import { VaultSessionRow } from './AiVaultSessionRow'
+
+beforeEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test-only window.api shim
+  ;(window as any).api = {
+    aiVault: {
+      listSubagentSessions: vi.fn(),
+      getFirstUserPrompt: vi.fn()
+    },
+    shell: { openFilePath: vi.fn() }
+  }
+})
 
 const dummySession: AiVaultSession = {
   id: 'session-123',
