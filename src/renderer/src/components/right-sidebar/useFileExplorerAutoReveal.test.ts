@@ -1,15 +1,19 @@
 // @vitest-environment happy-dom
 
 import { renderHook } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useFileExplorerAutoReveal } from './useFileExplorerAutoReveal'
 import type { OpenFile } from '@/store/slices/editor'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import type { FileExplorerRowProjection } from './file-explorer-row-projection'
 
+const { mockSetState } = vi.hoisted(() => ({
+  mockSetState: vi.fn()
+}))
+
 vi.mock('@/store', () => ({
   useAppStore: {
-    setState: vi.fn()
+    setState: mockSetState
   }
 }))
 
@@ -28,6 +32,10 @@ describe('useFileExplorerAutoReveal', () => {
     setSelectedPath: vi.fn(),
     virtualizer: { scrollToIndex: vi.fn() } as unknown as Virtualizer<HTMLDivElement, Element>
   }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
 
   it('triggers auto-reveal for edit mode tabs', () => {
     const setSelectedPath = vi.fn()
@@ -200,5 +208,141 @@ describe('useFileExplorerAutoReveal', () => {
     )
 
     expect(setSelectedPath).not.toHaveBeenCalled()
+  })
+
+  it('scrolls to the matching row when the file is already visible', () => {
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+    const setSelectedPath = vi.fn()
+    const scrollToIndex = vi.fn()
+    const openFiles: OpenFile[] = [
+      {
+        id: 'file-scroll',
+        filePath: '/repo/wt/src/scroll.ts',
+        relativePath: 'src/scroll.ts',
+        worktreeId: 'wt-1',
+        language: 'typescript',
+        isDirty: false,
+        mode: 'edit'
+      }
+    ]
+    const projection = mockProjection(true, 7)
+
+    renderHook(() =>
+      useFileExplorerAutoReveal({
+        ...defaultParams,
+        activeFileId: 'file-scroll',
+        openFiles,
+        rowProjection: projection,
+        setSelectedPath,
+        virtualizer: { scrollToIndex } as unknown as Virtualizer<HTMLDivElement, Element>
+      })
+    )
+
+    expect(setSelectedPath).toHaveBeenCalledWith('/repo/wt/src/scroll.ts')
+    expect(scrollToIndex).toHaveBeenCalledWith(7, { align: 'auto' })
+  })
+
+  it('triggers pendingExplorerReveal when unstaged diff file is in a collapsed folder', () => {
+    const setSelectedPath = vi.fn()
+    const openFiles: OpenFile[] = [
+      {
+        id: 'diff-collapsed',
+        filePath: '/repo/wt/src/deep/nested.ts',
+        relativePath: 'src/deep/nested.ts',
+        worktreeId: 'wt-1',
+        language: 'typescript',
+        isDirty: false,
+        mode: 'diff',
+        diffSource: 'unstaged'
+      }
+    ]
+    const projection = mockProjection(false)
+
+    renderHook(() =>
+      useFileExplorerAutoReveal({
+        ...defaultParams,
+        activeFileId: 'diff-collapsed',
+        openFiles,
+        rowProjection: projection,
+        setSelectedPath
+      })
+    )
+
+    expect(projection.hasPath).toHaveBeenCalledWith('/repo/wt/src/deep/nested.ts')
+    expect(setSelectedPath).not.toHaveBeenCalled()
+    expect(mockSetState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pendingExplorerReveal: expect.objectContaining({
+          worktreeId: 'wt-1',
+          filePath: '/repo/wt/src/deep/nested.ts',
+          flash: false
+        })
+      })
+    )
+  })
+
+  it('does not create a reveal request for commit diff in a collapsed folder', () => {
+    const setSelectedPath = vi.fn()
+    const openFiles: OpenFile[] = [
+      {
+        id: 'diff-commit-collapsed',
+        filePath: '/repo/wt/src/commit-deep.ts',
+        relativePath: 'src/commit-deep.ts',
+        worktreeId: 'wt-1',
+        language: 'typescript',
+        isDirty: false,
+        mode: 'diff',
+        diffSource: 'commit'
+      }
+    ]
+    const projection = mockProjection(false)
+
+    renderHook(() =>
+      useFileExplorerAutoReveal({
+        ...defaultParams,
+        activeFileId: 'diff-commit-collapsed',
+        openFiles,
+        rowProjection: projection,
+        setSelectedPath
+      })
+    )
+
+    expect(setSelectedPath).not.toHaveBeenCalled()
+    expect(projection.hasPath).not.toHaveBeenCalled()
+    expect(mockSetState).not.toHaveBeenCalled()
+  })
+
+  it('does not create a reveal request for branch diff in a collapsed folder', () => {
+    const setSelectedPath = vi.fn()
+    const openFiles: OpenFile[] = [
+      {
+        id: 'diff-branch-collapsed',
+        filePath: '/repo/wt/src/branch-deep.ts',
+        relativePath: 'src/branch-deep.ts',
+        worktreeId: 'wt-1',
+        language: 'typescript',
+        isDirty: false,
+        mode: 'diff',
+        diffSource: 'branch'
+      }
+    ]
+    const projection = mockProjection(false)
+
+    renderHook(() =>
+      useFileExplorerAutoReveal({
+        ...defaultParams,
+        activeFileId: 'diff-branch-collapsed',
+        openFiles,
+        rowProjection: projection,
+        setSelectedPath
+      })
+    )
+
+    expect(setSelectedPath).not.toHaveBeenCalled()
+    expect(projection.hasPath).not.toHaveBeenCalled()
+    expect(mockSetState).not.toHaveBeenCalled()
   })
 })
