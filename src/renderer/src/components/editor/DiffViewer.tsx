@@ -426,6 +426,7 @@ export default function DiffViewer({
               fontFamily: resolveEditorFontFamily(settings),
               lineNumbers: 'on',
               ...buildDiffEditorWordWrapOptions(settings?.diffWordWrap),
+              ignoreTrimWhitespace: !settings?.diffShowWhitespace,
               automaticLayout: true,
               renderOverviewRuler: true,
               scrollbar: diffEditorScrollbarOptions,

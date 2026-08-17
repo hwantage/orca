@@ -295,6 +295,7 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     notifications: getDefaultNotificationSettings(),
     diffDefaultView: 'inline',
     diffWordWrap: false,
+    diffShowWhitespace: false,
     combinedDiffFileTreeVisibleByDefault: false,
     prBotAuthorOverrides: [],
     promptCacheTimerEnabled: false,
