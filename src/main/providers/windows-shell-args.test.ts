@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildWslInteractiveLoginShellCommand } from '../../shared/wsl-login-shell-command'
 import { resolveSetupRunnerCommand } from '../../shared/setup-runner-command'
+import { withWindowsCmdOsc133Prompt } from '../windows-cmd-osc133'
 import { resolveWindowsShellLaunchArgs } from './windows-shell-args'
 // Why resolved rather than hardcoded: the wrapper tree is content-addressed.
 import { getShellReadyWrapperRoot } from './local-pty-shell-ready-wrapper-root'
@@ -66,7 +67,10 @@ describe('resolveWindowsShellLaunchArgs', () => {
       undefined,
       CODEX_LAUNCH_PREFLIGHT
     )
-    expect(result.shellArgs).toEqual(['/K', `chcp 65001 > nul & ${CMD_CODEX_LAUNCH_PREFLIGHT}`])
+    expect(result.shellArgs).toEqual([
+      '/K',
+      withWindowsCmdOsc133Prompt('cmd.exe', `chcp 65001 > nul & ${CMD_CODEX_LAUNCH_PREFLIGHT}`)
+    ])
     expect(result.startupCommandDeliveredInShellArgs).toBeUndefined()
     expect(result.effectiveCwd).toBe('C:\\Users\\alice')
     expect(result.validationCwd).toBe('C:\\Users\\alice')
@@ -83,7 +87,10 @@ describe('resolveWindowsShellLaunchArgs', () => {
     )
     expect(result.shellArgs).toEqual([
       '/K',
-      `chcp 65001 > nul & ${CMD_CODEX_LAUNCH_PREFLIGHT} & codex --no-alt-screen`
+      withWindowsCmdOsc133Prompt(
+        'cmd.exe',
+        `chcp 65001 > nul & ${CMD_CODEX_LAUNCH_PREFLIGHT} & codex --no-alt-screen`
+      )
     ])
     expect(result.startupCommandDeliveredInShellArgs).toBe(true)
   })
@@ -98,7 +105,10 @@ describe('resolveWindowsShellLaunchArgs', () => {
       undefined,
       'cd /d "C:\\Users\\alice\\repo" && claude "--resume" "session one"'
     )
-    expect(result.shellArgs).toEqual(['/K', 'chcp 65001 > nul'])
+    expect(result.shellArgs).toEqual([
+      '/K',
+      withWindowsCmdOsc133Prompt('cmd.exe', 'chcp 65001 > nul')
+    ])
     expect(result.startupCommandDeliveredInShellArgs).toBeUndefined()
   })
 
@@ -111,7 +121,10 @@ describe('resolveWindowsShellLaunchArgs', () => {
       `codex ${'x'.repeat(7000)}`,
       CODEX_LAUNCH_PREFLIGHT
     )
-    expect(result.shellArgs).toEqual(['/K', `chcp 65001 > nul & ${CMD_CODEX_LAUNCH_PREFLIGHT}`])
+    expect(result.shellArgs).toEqual([
+      '/K',
+      withWindowsCmdOsc133Prompt('cmd.exe', `chcp 65001 > nul & ${CMD_CODEX_LAUNCH_PREFLIGHT}`)
+    ])
     expect(result.startupCommandDeliveredInShellArgs).toBeUndefined()
   })
 

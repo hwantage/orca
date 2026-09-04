@@ -13,6 +13,7 @@ import {
   getPowerShellOsc133Bootstrap
 } from '../powershell-osc133-bootstrap'
 import { quoteStartupArg } from '../../shared/tui-agent-startup-shell'
+import { withWindowsCmdOsc133Prompt } from '../windows-cmd-osc133'
 
 /** cmd.exe's own documented ceiling; callers that go through sshd budget below it. */
 export const CMD_EXE_COMMAND_LINE_MAX_CHARS = 8191
@@ -191,8 +192,9 @@ export function resolveWindowsShellLaunchArgs(
       ...(codexLaunchPreflightCommand ? [CMD_CODEX_LAUNCH_PREFLIGHT] : []),
       ...(shellArgStartupCommand ? [shellArgStartupCommand] : [])
     ]
+    // Why unconditional: a manually typed agent needs the 133;D exit boundary too.
     return {
-      shellArgs: ['/K', startupCommands.join(' & ')],
+      shellArgs: ['/K', withWindowsCmdOsc133Prompt(shellPath, startupCommands.join(' & '))],
       ...(shellArgStartupCommand ? { startupCommandDeliveredInShellArgs: true } : {}),
       effectiveCwd: nativeCwd,
       validationCwd: nativeCwd
