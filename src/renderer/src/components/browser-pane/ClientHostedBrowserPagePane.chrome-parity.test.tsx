@@ -28,6 +28,7 @@ import { useAppStore } from '@/store'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { installClientHostedPaneApi, paneChannel } from './client-hosted-browser-pane-test-rig'
 import { ClientHostedBrowserPagePane } from './ClientHostedBrowserPagePane'
+import { consumeBrowserFocusRequest } from './host-guest/browser-focus'
 
 const PLACEMENT = {
   kind: 'client' as const,
@@ -92,6 +93,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  vi.restoreAllMocks()
 })
 
 describe('ClientHostedBrowserPagePane chrome parity', () => {
@@ -114,6 +116,33 @@ describe('ClientHostedBrowserPagePane chrome parity', () => {
     act(() => contextMenu.emit(contextMenuEvent()))
     act(() => screen.getByRole('menuitem', { name: 'Copy Page URL' }).click())
     expect(writeClipboardText).toHaveBeenCalledWith('https://example.internal/app')
+  })
+
+  it('requests focus for a link-opened tab without refocusing the opener', () => {
+    const linkUrl = 'https://example.internal/destination'
+    const createBrowserTab = vi.spyOn(useAppStore.getState(), 'createBrowserTab').mockReturnValue({
+      id: 'workspace-b',
+      worktreeId: 'worktree-a',
+      activePageId: 'page-b',
+      url: linkUrl,
+      title: linkUrl,
+      loading: false,
+      faviconUrl: null,
+      canGoBack: false,
+      canGoForward: false,
+      loadError: null,
+      createdAt: 1
+    })
+    const { webview } = renderPane()
+    act(() => contextMenu.emit(contextMenuEvent({ linkUrl })))
+    vi.mocked(webview.focus).mockClear()
+
+    act(() => screen.getByRole('menuitem', { name: 'Open Link In Orca Browser' }).click())
+
+    expect(consumeBrowserFocusRequest('page-b')).toBe('webview')
+    expect(createBrowserTab).toHaveBeenCalledWith('worktree-a', linkUrl, { title: linkUrl })
+    expect(screen.queryByTestId('browser-context-menu')).toBeNull()
+    expect(webview.focus).not.toHaveBeenCalled()
   })
 
   it('opens Find from the chord in chrome and from the chord forwarded out of the guest', () => {

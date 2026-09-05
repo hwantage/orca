@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { createBrowserTabMock, storeState } = vi.hoisted(() => ({
+const { createBrowserTabMock, requestBrowserFocusMock, storeState } = vi.hoisted(() => ({
   createBrowserTabMock: vi.fn(),
+  requestBrowserFocusMock: vi.fn(),
   storeState: {
     value: {} as Record<string, unknown>
   }
@@ -15,6 +16,9 @@ vi.mock('@/lib/worktree-runtime-owner', () => ({
 }))
 vi.mock('@/components/browser-pane/describe-page/live-browser-url-registry', () => ({
   rememberLiveBrowserUrl: vi.fn()
+}))
+vi.mock('@/components/browser-pane/host-guest/browser-focus', () => ({
+  requestBrowserFocus: requestBrowserFocusMock
 }))
 vi.mock('./browser-automation-bootstrap-lease', () => ({
   acquireBrowserAutomationBootstrapLease: vi.fn()
@@ -55,7 +59,8 @@ function captureOpenLinkHandler(): (event: { browserPageId: string; url: string 
 
 describe('link-opened Orca tabs', () => {
   beforeEach(() => {
-    createBrowserTabMock.mockReset()
+    createBrowserTabMock.mockReset().mockReturnValue({ activePageId: 'page-2' })
+    requestBrowserFocusMock.mockReset()
   })
 
   it('inherits the opener tab session so an isolated profile cannot leak into the default one', () => {
@@ -85,6 +90,23 @@ describe('link-opened Orca tabs', () => {
         sessionPartition: 'persist:orca-browser-session-client-a'
       })
     )
+  })
+
+  it('moves keyboard focus from the opener to the newly activated page', () => {
+    storeState.value = {
+      browserPagesByWorkspace: {
+        'workspace-1': [{ id: 'page-1', workspaceId: 'workspace-1', worktreeId: 'worktree-1' }]
+      },
+      browserTabsByWorktree: {},
+      createBrowserTab: createBrowserTabMock
+    }
+
+    captureOpenLinkHandler()({ browserPageId: 'page-1', url: 'https://docs.example.com/guide' })
+
+    expect(requestBrowserFocusMock).toHaveBeenCalledWith({
+      pageId: 'page-2',
+      target: 'webview'
+    })
   })
 
   it('leaves the profile unset when the opener tab is gone, so the user default still applies', () => {

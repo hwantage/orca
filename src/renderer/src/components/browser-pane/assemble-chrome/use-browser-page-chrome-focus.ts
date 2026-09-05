@@ -5,6 +5,7 @@ import { keybindingMatchesAction } from '../../../../../shared/keybindings'
 import {
   consumeBrowserFocusRequest,
   ORCA_BROWSER_FOCUS_REQUEST_EVENT,
+  peekBrowserFocusRequest,
   type BrowserFocusRequestDetail
 } from '../host-guest/browser-focus'
 import { browserOverlayOwnsShortcutTarget } from '../describe-page/browser-overlay-shortcut-target'
@@ -191,11 +192,12 @@ export function useBrowserPageChromeFocus({
     if (!isActive) {
       return
     }
-    const focusTarget = consumeBrowserFocusRequest(browserTabId)
+    const focusTarget = peekBrowserFocusRequest(browserTabId)
     if (!focusTarget) {
       return
     }
     if (focusTarget === 'address-bar') {
+      consumeBrowserFocusRequest(browserTabId)
       return startAddressBarFocusGrab()
     }
     // Why: lowering the latch is not enough — a grab already in flight would spend its remaining
@@ -207,6 +209,10 @@ export function useBrowserPageChromeFocus({
     const runFocus = (): void => {
       if (cancelled) {
         return
+      }
+      // Why: consuming before the first frame loses the request during StrictMode effect replay.
+      if (attempts === 0) {
+        consumeBrowserFocusRequest(browserTabId)
       }
       attempts += 1
       if (!focusGuestNow() && attempts < ADDRESS_BAR_FOCUS_FRAMES) {

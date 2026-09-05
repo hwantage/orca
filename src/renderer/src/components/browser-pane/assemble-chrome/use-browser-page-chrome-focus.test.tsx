@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, cleanup, render } from '@testing-library/react'
-import { useRef } from 'react'
+import { StrictMode, useRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppStore } from '@/store'
 import { requestBrowserFocus } from '../host-guest/browser-focus'
@@ -314,6 +314,31 @@ describe('useBrowserPageChromeFocus', () => {
     act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
 
     renderChrome()
+
+    expect(document.activeElement).toBe(guest())
+  })
+
+  it('does not replay a pending guest request after the pane becomes inactive', () => {
+    act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+    const view = render(<ChromeHarness hasGuest={false} />)
+    act(() => flushFrames(1))
+
+    view.rerender(<ChromeHarness isActive={false} hasGuest={false} />)
+    act(() => addressBar().focus())
+    view.rerender(<ChromeHarness />)
+    act(() => flushFrames())
+
+    expect(document.activeElement).toBe(addressBar())
+  })
+
+  it('preserves a guest request through StrictMode effect replay', () => {
+    act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+    render(
+      <StrictMode>
+        <ChromeHarness />
+      </StrictMode>
+    )
+    act(() => flushFrames())
 
     expect(document.activeElement).toBe(guest())
   })

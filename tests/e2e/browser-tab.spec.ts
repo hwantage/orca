@@ -286,6 +286,9 @@ async function clickBrowserLink(
     frameSelector?: string
   } = {}
 ): Promise<void> {
+  await expect(
+    page.locator(`[data-browser-overlay-tab-id="${browserTabId}"] webview`)
+  ).toBeVisible()
   await page.evaluate(
     async ({ targetBrowserTabId, targetSelector, inputModifiers, button, frameSelector }) => {
       const slot = [...document.querySelectorAll('[data-browser-overlay-tab-id]')].find(
@@ -317,6 +320,7 @@ async function clickBrowserLink(
       if (!point) {
         throw new Error(`Missing browser link ${targetSelector}`)
       }
+      webview.focus()
       await webview.sendInputEvent({ type: 'mouseMove', modifiers: inputModifiers, ...point })
       await webview.sendInputEvent({
         type: 'mouseDown',
@@ -703,6 +707,38 @@ test.describe('Browser Tab', () => {
       const sourceTabLocator = orcaPage.locator(`[data-tab-id="${sourceTab!.id}"]`)
       await clickBrowserLink(orcaPage, sourceTab!.id, '#external-link')
       await expectBrowserTabActive(orcaPage, 'Linked destination')
+      const destinationTabLocator = orcaPage
+        .locator('[data-tab-id]')
+        .filter({ hasText: 'Linked destination' })
+      const destinationTabId = await destinationTabLocator.getAttribute('data-tab-id')
+      const destinationWebview = orcaPage.locator(
+        `[data-browser-overlay-tab-id="${destinationTabId}"] webview`
+      )
+      await expect(destinationWebview).toBeFocused()
+      await test.step('CmdOrCtrl+W closes the natively focused destination tab', async (step) => {
+        // Why: hidden windows cannot verify native keyboard focus.
+        step.skip(
+          process.env.ORCA_E2E_FOREGROUND !== '1',
+          'Native focus verification requires ORCA_E2E_FOREGROUND=1'
+        )
+        await electronApp.evaluate(
+          ({ webContents }, activeGuestId) => {
+            const focused = webContents.getFocusedWebContents()
+            if (focused?.id !== activeGuestId) {
+              throw new Error('Keyboard focus did not move to the destination guest')
+            }
+            focused.sendInputEvent({
+              type: 'keyDown',
+              keyCode: 'W',
+              modifiers: process.platform === 'darwin' ? ['meta'] : ['control']
+            })
+          },
+          await destinationWebview.evaluate((webview: Electron.WebviewTag) =>
+            webview.getWebContentsId()
+          )
+        )
+        await expect(destinationTabLocator).toHaveCount(0)
+      })
       await expect(sourceTabLocator).toContainText('Source page')
       await switchToBrowserTab(orcaPage, worktreeId, sourceTab!.id)
 
