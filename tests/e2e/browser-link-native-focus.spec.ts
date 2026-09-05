@@ -12,17 +12,16 @@ async function expectBrowserGuestFocused(
   electronApp: ElectronApplication,
   webview: Locator
 ): Promise<number> {
-  const guestId = await webview.evaluate((element: Electron.WebviewTag) =>
-    element.getWebContentsId()
-  )
-  await expect
-    .poll(() =>
-      electronApp.evaluate(({ BrowserWindow, webContents }) => ({
+  let guestId = 0
+  await expect(async () => {
+    guestId = await webview.evaluate((element: Electron.WebviewTag) => element.getWebContentsId())
+    expect(
+      await electronApp.evaluate(({ BrowserWindow, webContents }) => ({
         windowFocused: BrowserWindow.getFocusedWindow() !== null,
         guestId: webContents.getFocusedWebContents()?.id ?? null
       }))
-    )
-    .toEqual({ windowFocused: true, guestId })
+    ).toEqual({ windowFocused: true, guestId })
+  }).toPass({ timeout: 10_000 })
   return guestId
 }
 
