@@ -11,7 +11,6 @@ import { useAppStore } from '@/store'
 import { translate } from '@/i18n/i18n'
 import { normalizeExternalBrowserUrl } from '../../../../../shared/browser-url'
 import type { BrowserPageContextMenuState } from '../describe-page/browser-page-types'
-import { requestBrowserFocus } from '../host-guest/browser-focus'
 
 // `focus:` rather than `focus-visible:` — items are only ever focused programmatically
 // while the menu is open, so every focus here is keyboard navigation.
@@ -187,14 +186,11 @@ export function BrowserPageContextMenu({
               role="menuitem"
               className={MENU_ITEM_CLASS}
               onClick={() => {
-                const newTab = createBrowserTab(worktreeId, contextMenu.linkUrl!, {
-                  title: contextMenu.linkUrl!
+                createBrowserTab(worktreeId, contextMenu.linkUrl!, {
+                  title: contextMenu.linkUrl!,
+                  activate: false
                 })
-                // Why: opening a new tab must not restore focus to the opener.
-                setContextMenu(null)
-                if (newTab.activePageId) {
-                  requestBrowserFocus({ pageId: newTab.activePageId, target: 'webview' })
-                }
+                closeMenu()
               }}
             >
               {translate(
