@@ -61,6 +61,9 @@ export function useBrowserPageChromeFocus({
       if (!input) {
         return false
       }
+      if (!keepAddressBarFocusRef.current) {
+        consumeBrowserFocusRequest(browserTabId)
+      }
       guestFocus.blur()
       input.focus()
       if (selection) {
@@ -72,7 +75,7 @@ export function useBrowserPageChromeFocus({
       }
       return document.activeElement === input
     },
-    [addressBarInputRef, guestFocus]
+    [addressBarInputRef, browserTabId, guestFocus]
   )
 
   const focusGuestNow = useCallback(() => {
@@ -189,11 +192,12 @@ export function useBrowserPageChromeFocus({
   }, [chromeShortcutScope, focusAddressBarNow, keybindings, workspaceId])
 
   useEffect(() => {
-    if (!isActive) {
+    const focusTarget = peekBrowserFocusRequest(browserTabId)
+    if (focusTarget === 'webview' && (!isActive || chromeShortcutScope === 'inactive')) {
+      consumeBrowserFocusRequest(browserTabId)
       return
     }
-    const focusTarget = peekBrowserFocusRequest(browserTabId)
-    if (!focusTarget) {
+    if (!isActive || !focusTarget) {
       return
     }
     if (focusTarget === 'address-bar') {
@@ -206,16 +210,21 @@ export function useBrowserPageChromeFocus({
     let cancelled = false
     let frameId = 0
     let attempts = 0
+    const cancelPendingFocus = (): void => {
+      consumeBrowserFocusRequest(browserTabId)
+    }
+    window.addEventListener('pointerdown', cancelPendingFocus, true)
     const runFocus = (): void => {
       if (cancelled) {
         return
       }
-      // Why: consuming before the first frame loses the request during StrictMode effect replay.
-      if (attempts === 0) {
-        consumeBrowserFocusRequest(browserTabId)
+      if (peekBrowserFocusRequest(browserTabId) !== 'webview') {
+        return
       }
       attempts += 1
-      if (!focusGuestNow() && attempts < ADDRESS_BAR_FOCUS_FRAMES) {
+      if (focusGuestNow()) {
+        consumeBrowserFocusRequest(browserTabId)
+      } else if (attempts < ADDRESS_BAR_FOCUS_FRAMES) {
         frameId = window.requestAnimationFrame(runFocus)
       }
     }
@@ -224,8 +233,16 @@ export function useBrowserPageChromeFocus({
     return () => {
       cancelled = true
       window.cancelAnimationFrame(frameId)
+      window.removeEventListener('pointerdown', cancelPendingFocus, true)
     }
-  }, [browserTabId, cancelAddressBarFocusGrab, focusGuestNow, isActive, startAddressBarFocusGrab])
+  }, [
+    browserTabId,
+    cancelAddressBarFocusGrab,
+    chromeShortcutScope,
+    focusGuestNow,
+    isActive,
+    startAddressBarFocusGrab
+  ])
 
   useEffect(() => {
     if (!isActive) {

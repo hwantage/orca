@@ -105,8 +105,8 @@ export function registerBrowserStateIpcBridge(
             }
           : {})
       })
-      if (newTab.activePageId) {
-        // Why: state activation alone leaves keyboard shortcuts owned by the opener guest.
+      if ((activate ?? true) && newTab.activePageId) {
+        // Tab activation alone can leave keyboard input on the opener guest.
         requestBrowserFocus({ pageId: newTab.activePageId, target: 'webview' })
       }
     })

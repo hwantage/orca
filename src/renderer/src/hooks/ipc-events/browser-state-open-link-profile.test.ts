@@ -100,23 +100,6 @@ describe('link-opened Orca tabs', () => {
     )
   })
 
-  it('moves keyboard focus from the opener to the newly activated page', () => {
-    storeState.value = {
-      browserPagesByWorkspace: {
-        'workspace-1': [{ id: 'page-1', workspaceId: 'workspace-1', worktreeId: 'worktree-1' }]
-      },
-      browserTabsByWorktree: {},
-      createBrowserTab: createBrowserTabMock
-    }
-
-    captureOpenLinkHandler()({ browserPageId: 'page-1', url: 'https://docs.example.com/guide' })
-
-    expect(requestBrowserFocusMock).toHaveBeenCalledWith({
-      pageId: 'page-2',
-      target: 'webview'
-    })
-  })
-
   it('leaves the profile unset when the opener tab is gone, so the user default still applies', () => {
     storeState.value = {
       browserPagesByWorkspace: {
@@ -132,7 +115,33 @@ describe('link-opened Orca tabs', () => {
     expect('sessionProfileId' in options).toBe(false)
   })
 
-  it('creates modifier-click links in the background', () => {
+  it.each([true, undefined])('focuses an activated link when activate is %s', (activate) => {
+    storeState.value = {
+      browserPagesByWorkspace: {
+        'workspace-1': [{ id: 'page-1', workspaceId: 'workspace-1', worktreeId: 'worktree-1' }]
+      },
+      browserTabsByWorktree: {},
+      createBrowserTab: createBrowserTabMock
+    }
+
+    captureOpenLinkHandler()({
+      browserPageId: 'page-1',
+      url: 'https://docs.example.com/foreground',
+      activate
+    })
+
+    expect(createBrowserTabMock).toHaveBeenCalledWith(
+      'worktree-1',
+      'https://docs.example.com/foreground',
+      expect.objectContaining({ activate: true })
+    )
+    expect(requestBrowserFocusMock).toHaveBeenCalledExactlyOnceWith({
+      pageId: 'page-2',
+      target: 'webview'
+    })
+  })
+
+  it('creates background links without requesting keyboard focus', () => {
     storeState.value = {
       browserPagesByWorkspace: {
         'workspace-1': [{ id: 'page-1', workspaceId: 'workspace-1', worktreeId: 'worktree-1' }]
@@ -152,5 +161,6 @@ describe('link-opened Orca tabs', () => {
       'https://docs.example.com/background',
       expect.objectContaining({ activate: false })
     )
+    expect(requestBrowserFocusMock).not.toHaveBeenCalled()
   })
 })
