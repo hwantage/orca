@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { basename, dirname } from 'node:path'
 import type { AiVaultAgent, AiVaultScanIssue, AiVaultSession } from '../../shared/ai-vault-types'
 import {
   addPreviewContent,
@@ -23,6 +23,13 @@ function openReadonlyDatabase(dbPath: string): SyncDatabase {
   // Why: query_only prevents accidental writes to the user's Hermes database.
   db.pragma('query_only = ON')
   return db
+}
+
+/**
+ * SyncDatabase with `fileMustExist` throws "SQLite database does not exist: <path>".
+ */
+function isMissingDatabase(err: unknown): boolean {
+  return errorMessage(err).startsWith('SQLite database does not exist')
 }
 
 /**
@@ -71,10 +78,14 @@ type SessionColumns = {
   modelCol: string
   createdCol: string
   updatedCol: string
+  sourceCol: string | null
 }
 
 /**
  * Dynamically maps column names for sessions table based on schema variants.
+ * Hermes 0.18+/0.19+ state.db uses `started_at` / `ended_at` (unix seconds, REAL);
+ * `ended_at` stays NULL while a session is open, so the latest message timestamp is
+ * folded in as the effective update time.
  */
 function resolveSessionColumns(db: SyncDatabase): SessionColumns {
   const idCol = columnExists(db, 'sessions', 'id') ? 'id' : 'session_id'
@@ -83,22 +94,37 @@ function resolveSessionColumns(db: SyncDatabase): SessionColumns {
   const modelCol = columnExists(db, 'sessions', 'model') ? 'model' : 'NULL'
   const createdCol = columnExists(db, 'sessions', 'created_at')
     ? 'created_at'
-    : columnExists(db, 'sessions', 'session_start')
-      ? 'session_start'
-      : 'NULL'
-  const updatedCol = columnExists(db, 'sessions', 'updated_at')
+    : columnExists(db, 'sessions', 'started_at')
+      ? 'started_at'
+      : columnExists(db, 'sessions', 'session_start')
+        ? 'session_start'
+        : 'NULL'
+  const endedCol = columnExists(db, 'sessions', 'updated_at')
     ? 'updated_at'
-    : columnExists(db, 'sessions', 'last_updated')
-      ? 'last_updated'
-      : createdCol
-  return { idCol, titleCol, cwdCol, modelCol, createdCol, updatedCol }
+    : columnExists(db, 'sessions', 'ended_at')
+      ? 'ended_at'
+      : columnExists(db, 'sessions', 'last_updated')
+        ? 'last_updated'
+        : 'NULL'
+  const lastMessageExpr =
+    tableExists(db, 'messages') &&
+    columnExists(db, 'messages', 'session_id') &&
+    columnExists(db, 'messages', 'timestamp')
+      ? `(SELECT MAX(timestamp) FROM messages WHERE messages.session_id = sessions.${idCol})`
+      : null
+  const updatedCol = lastMessageExpr
+    ? `COALESCE(${lastMessageExpr}, ${endedCol}, ${createdCol})`
+    : `COALESCE(${endedCol}, ${createdCol})`
+  const sourceCol = columnExists(db, 'sessions', 'source') ? 'source' : null
+  return { idCol, titleCol, cwdCol, modelCol, createdCol, updatedCol, sourceCol }
 }
 
 /**
  * Builds the SQL SELECT query string used to discover Hermes sessions.
  */
 function buildSessionListQuery(db: SyncDatabase): string {
-  const { idCol, titleCol, cwdCol, modelCol, createdCol, updatedCol } = resolveSessionColumns(db)
+  const { idCol, titleCol, cwdCol, modelCol, createdCol, updatedCol, sourceCol } =
+    resolveSessionColumns(db)
 
   // Why: filter out zero-turn empty sessions that have no recorded messages in the messages table
   // so empty session shells created by CLI startup do not clutter the AI Vault session list.
@@ -107,6 +133,8 @@ function buildSessionListQuery(db: SyncDatabase): string {
   const messagesPredicate = msgSessionIdCol
     ? `AND EXISTS (SELECT 1 FROM messages WHERE ${msgSessionIdCol} = sessions.${idCol})`
     : ''
+  // Why: delegate_task children are recorded as their own sessions; they belong to the parent turn.
+  const sourcePredicate = sourceCol ? `AND COALESCE(${sourceCol}, '') <> 'subagent'` : ''
 
   return `SELECT ${idCol} AS id,
                  ${titleCol} AS title,
@@ -115,8 +143,8 @@ function buildSessionListQuery(db: SyncDatabase): string {
                  ${createdCol} AS created_at,
                  ${updatedCol} AS updated_at
           FROM sessions
-          WHERE 1=1 ${messagesPredicate}
-          ORDER BY ${updatedCol} DESC
+          WHERE 1=1 ${messagesPredicate} ${sourcePredicate}
+          ORDER BY updated_at DESC
           LIMIT ?`
 }
 
@@ -126,9 +154,6 @@ function buildSessionListQuery(db: SyncDatabase): string {
 export function listHermesSqliteSessionIds(dbPaths: readonly string[]): Set<string> {
   const ids = new Set<string>()
   for (const dbPath of dbPaths) {
-    if (!existsSync(dbPath)) {
-      continue
-    }
     let db: SyncDatabase | null = null
     try {
       db = openReadonlyDatabase(dbPath)
@@ -168,9 +193,6 @@ export async function listHermesSqliteSessions(args: {
 }): Promise<SessionFileCandidate[]> {
   const candidates: SessionFileCandidate[] = []
   for (const dbPath of args.dbPaths) {
-    if (!existsSync(dbPath)) {
-      continue
-    }
     let db: SyncDatabase | null = null
     try {
       db = openReadonlyDatabase(dbPath)
@@ -194,11 +216,14 @@ export async function listHermesSqliteSessions(args: {
         })
       }
     } catch (err) {
-      args.issues.push({
-        agent: 'hermes',
-        path: dbPath,
-        message: errorMessage(err)
-      })
+      // Why: a missing state.db is the normal case for homes that never ran Hermes.
+      if (!isMissingDatabase(err)) {
+        args.issues.push({
+          agent: 'hermes',
+          path: dbPath,
+          message: errorMessage(err)
+        })
+      }
     } finally {
       db?.close()
     }
@@ -221,9 +246,6 @@ export async function parseHermesSqliteSession(args: {
   sessionId: string
   platform: NodeJS.Platform
 }): Promise<AiVaultSession | null> {
-  if (!existsSync(args.dbPath)) {
-    return null
-  }
   let db: SyncDatabase | null = null
   try {
     db = openReadonlyDatabase(args.dbPath)
@@ -286,10 +308,14 @@ export async function parseHermesSqliteSession(args: {
             : columnExists(db, 'messages', 'id')
               ? 'id'
               : 'rowid'
+        // Why: Hermes marks compacted-away history as active=0; only the live transcript is shown.
+        const activePredicate = columnExists(db, 'messages', 'active')
+          ? 'AND COALESCE(active, 1) = 1'
+          : ''
 
         const msgQuery = `SELECT ${roleCol} AS role, ${contentCol} AS content
                           FROM messages
-                          WHERE ${msgSessionIdCol} = ?
+                          WHERE ${msgSessionIdCol} = ? ${activePredicate}
                           ORDER BY ${orderCol} ASC`
 
         const messages = db.prepare(msgQuery).all(args.sessionId) as {
@@ -310,10 +336,41 @@ export async function parseHermesSqliteSession(args: {
       }
     }
 
-    return finalizeSession(accumulator, args.platform)
+    return withHermesProfile(finalizeSession(accumulator, args.platform), args.dbPath)
   } catch {
     return null
   } finally {
     db?.close()
+  }
+}
+
+/**
+ * Derive the Hermes profile name from a state.db path of the form
+ * `<home>/profiles/<name>/state.db`; returns `null` for the root home.
+ */
+export function hermesProfileFromDbPath(dbPath: string): string | null {
+  const profileDir = dirname(dbPath)
+  if (basename(dirname(profileDir)).toLowerCase() !== 'profiles') {
+    return null
+  }
+  const name = basename(profileDir)
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) ? name : null
+}
+
+/**
+ * Sessions stored under a named profile must be resumed through that profile,
+ * otherwise `hermes --resume` looks the ID up in the default state.db.
+ */
+function withHermesProfile(session: AiVaultSession | null, dbPath: string): AiVaultSession | null {
+  const profile = hermesProfileFromDbPath(dbPath)
+  if (!session || !profile) {
+    return session
+  }
+  return {
+    ...session,
+    resumeCommand: session.resumeCommand.replace(
+      /\bhermes --resume\b/,
+      `hermes --profile ${profile} --resume`
+    )
   }
 }
