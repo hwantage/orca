@@ -20,11 +20,6 @@ describe('detectLanguage', () => {
     expect(detectLanguage('packages/app.nimble')).toBe('nim')
   })
 
-  it('maps JSP files to the jsp language id', () => {
-    expect(detectLanguage('src/main/webapp/index.jsp')).toBe('jsp')
-    expect(detectLanguage('src/main/webapp/header.jspf')).toBe('jsp')
-  })
-
   it('maps exact filenames from Windows paths', () => {
     expect(detectLanguage('C:\\Users\\alice\\repo\\Dockerfile')).toBe('dockerfile')
     expect(detectLanguage('C:\\Users\\alice\\repo\\CMakeLists.txt')).toBe('cmake')
@@ -69,10 +64,10 @@ describe('detectLanguage', () => {
     expect(detectLanguage('analysis/MODEL.R')).toBe('r')
   })
 
-  it('maps .jsp/.jspf files to the built-in html language id (case-insensitive)', () => {
-    expect(detectLanguage('src/main/webapp/index.jsp')).toBe('html')
-    expect(detectLanguage('src/main/webapp/WEB-INF/include/header.jspf')).toBe('html')
-    expect(detectLanguage('C:\\app\\WebContent\\WEB-INF\\jsp\\LIST.JSP')).toBe('html')
+  it('maps .jsp/.jspf files to the dedicated jsp language id (case-insensitive)', () => {
+    expect(detectLanguage('src/main/webapp/index.jsp')).toBe('jsp')
+    expect(detectLanguage('src/main/webapp/WEB-INF/include/header.jspf')).toBe('jsp')
+    expect(detectLanguage('C:\\app\\WebContent\\WEB-INF\\jsp\\LIST.JSP')).toBe('jsp')
   })
 
   it('maps .liquid files to the Monaco built-in liquid language id, including the compound .html.liquid form', () => {

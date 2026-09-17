@@ -18,8 +18,13 @@ function isRuleEntry(rule: MonarchRule): rule is [RegExp, string | MonarchAction
   return Array.isArray(rule)
 }
 
+function getTokenizer(): Record<string, MonarchRule[]> {
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Monaco declares `tokenizer` with open index signatures; the test table walk inspects concrete rule arrays.
+  return jspMonarchLanguage.tokenizer as Record<string, MonarchRule[]>
+}
+
 function rulesFor(state: string): [RegExp, string | MonarchAction, string?][] {
-  const tokenizer = jspMonarchLanguage.tokenizer as Record<string, MonarchRule[]>
+  const tokenizer = getTokenizer()
   return tokenizer[state].flatMap((rule) =>
     isRuleEntry(rule) ? [rule] : rulesFor(rule.include.replace(/^@/, ''))
   )
@@ -122,7 +127,9 @@ describe('registerJspLanguage', () => {
       html: { registerHTMLLanguageService }
     }
 
+    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: partial test mock providing only the Monaco methods invoked by registerJspLanguage.
     registerJspLanguage(monacoMock as never)
+    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: partial test mock providing only the Monaco methods invoked by registerJspLanguage.
     registerJspLanguage(monacoMock as never)
 
     expect(register).toHaveBeenCalledTimes(1)
@@ -276,8 +283,11 @@ describe('registerJspLanguage', () => {
   it('pops the embedded language when the script or style block closes', () => {
     const scriptRule = rulesFor('scriptBody')[0]
     const styleRule = rulesFor('styleBody')[0]
-    const scriptAction = scriptRule[1] as MonarchAction
-    const styleAction = styleRule[1] as MonarchAction
+    const scriptAction = scriptRule[1]
+    const styleAction = styleRule[1]
+    if (typeof scriptAction !== 'object' || typeof styleAction !== 'object') {
+      throw new Error('Expected Monarch action objects')
+    }
 
     // Monarch throws 'no rule containing nextEmbedded: "@pop"' without these.
     expect(scriptAction.nextEmbedded).toBe('@pop')
@@ -299,8 +309,13 @@ describe('registerJspLanguage', () => {
 
     expect(scriptOpen).toBeDefined()
     expect(styleOpen).toBeDefined()
-    expect((scriptOpen?.[1] as MonarchAction | undefined)?.switchTo).toBe('@scriptBody')
-    expect((styleOpen?.[1] as MonarchAction | undefined)?.switchTo).toBe('@styleBody')
+    const scriptAction = scriptOpen?.[1]
+    const styleAction = styleOpen?.[1]
+    if (typeof scriptAction !== 'object' || typeof styleAction !== 'object') {
+      throw new Error('Expected Monarch action objects')
+    }
+    expect(scriptAction.switchTo).toBe('@scriptBody')
+    expect(styleAction.switchTo).toBe('@styleBody')
   })
 
   it('uses theme-backed token names for operators', () => {
@@ -312,7 +327,7 @@ describe('registerJspLanguage', () => {
   })
 
   it('only references tokenizer states that exist', () => {
-    const tokenizer = jspMonarchLanguage.tokenizer as Record<string, MonarchRule[]>
+    const tokenizer = getTokenizer()
     const declared = new Set(Object.keys(tokenizer))
 
     Object.values(tokenizer).forEach((rules) => {
