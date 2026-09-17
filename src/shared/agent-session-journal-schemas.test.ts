@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AgentJournalItemBodySchema,
   isAdmissibleAgentJournalItemBody,
   isAdmissibleAgentJournalMessageBody,
   isAdmissibleAgentJournalRenderItem,
@@ -49,7 +50,12 @@ const CANONICAL_BODIES: AgentJournalItemBody[] = [
   { kind: 'diff', path: 'a.ts', patch: PAYLOAD },
   {
     kind: 'approval',
-    title: 'Run?',
+    title: 'Claude wants to present a plan',
+    displayName: 'Present plan',
+    description: 'Review the proposed implementation steps.',
+    decisionReason: 'Plan mode requires approval.',
+    blockedPath: '/repo/PLAN.md',
+    matchedAskRule: { source: 'project', toolName: 'ExitPlanMode', ruleContent: 'ask' },
     detail: null,
     options: [{ id: 'a', label: 'Yes' }],
     resolution: RESOLUTION
@@ -67,6 +73,16 @@ const CANONICAL_BODIES: AgentJournalItemBody[] = [
     text: 'turn',
     turnLifecycle: { turnId: 'turn-1', state: 'running' },
     providerFrame: { provider: 'codex', kind: 'raw', payload: PAYLOAD }
+  },
+  {
+    kind: 'status',
+    text: 'turn',
+    turnLifecycle: { turnId: 'turn-2', state: 'completed', startedAt: 1_000, completedAt: 188_000 }
+  },
+  {
+    kind: 'status',
+    text: 'turn',
+    turnLifecycle: { turnId: 'turn-3', state: 'unverifiable', startedAt: 1_000 }
   }
 ]
 
@@ -265,13 +281,20 @@ describe('optional tool annotations', () => {
   const body = { kind: 'tool-call', name: 'shell', input: null, state: 'completed' }
   it('admits old rows and rows with optional annotations without a new kind', () => {
     expect(isAdmissibleAgentJournalItemBody(body)).toBe(true)
-    expect(isAdmissibleAgentJournalItemBody({ ...body, exitCode: 0, durationMs: 0 })).toBe(true)
+    expect(
+      isAdmissibleAgentJournalItemBody({ ...body, callId: 'call-1', exitCode: 0, durationMs: 0 })
+    ).toBe(true)
     expect(
       isAdmissibleAgentJournalItemBody({
         ...body,
         webSearchResults: [{ title: 'Docs', url: 'https://example.com' }]
       })
     ).toBe(true)
+    const padded = AgentJournalItemBodySchema.safeParse({ ...body, callId: ' call-1 ' })
+    expect(padded.success).toBe(true)
+    if (padded.success && padded.data.kind === 'tool-call') {
+      expect(padded.data.callId).toBe(' call-1 ')
+    }
   })
   it('admits explicit MCP identity without constraining the raw name', () => {
     expect(
@@ -283,6 +306,9 @@ describe('optional tool annotations', () => {
     ).toBe(true)
   })
   it.each([
+    { callId: '' },
+    { callId: ' \t' },
+    { callId: 1 },
     { exitCode: '127' },
     { exitCode: 1.5 },
     { durationMs: -1 },
@@ -290,4 +316,14 @@ describe('optional tool annotations', () => {
   ])('rejects malformed annotation %s', (metadata) =>
     expect(isAdmissibleAgentJournalItemBody({ ...body, ...metadata })).toBe(false)
   )
+
+  it('rejects whitespace-only provider IDs in message blocks too', () => {
+    expect(
+      isAdmissibleAgentJournalItemBody({
+        kind: 'message',
+        role: 'assistant',
+        blocks: [{ type: 'tool-call', name: 'shell', input: null, callId: '\n\t' }]
+      })
+    ).toBe(false)
+  })
 })

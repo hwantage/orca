@@ -49,6 +49,11 @@ const KNOWN_BLOCK_TYPES = new Set([
   'subagent-group'
 ])
 
+/** Provider IDs are opaque; reject all-whitespace values without rewriting valid IDs. */
+const ProviderCallId = z
+  .string()
+  .refine((value) => value.trim().length > 0, 'callId must contain a non-whitespace character')
+
 /** Child-agent lifecycle stays an open string for the same reason tool states
  *  do: a state a newer build writes must not turn the row malformed. */
 const SubagentEntry = z.object({
@@ -78,6 +83,7 @@ const Block = z.union([
       type: z.literal('tool-call'),
       name: z.string(),
       input: z.unknown().optional(),
+      callId: ProviderCallId.optional(),
       ...ToolMetadata
     }),
     z.object({
@@ -126,6 +132,12 @@ const Resolution = z.object({
   resolvedAt: z.number().nullable()
 })
 
+const ApprovalMatchedAskRule = z.object({
+  source: z.string(),
+  toolName: z.string(),
+  ruleContent: z.string().optional()
+})
+
 const MessageBody = z.object({
   kind: z.literal('message'),
   role: z.string().min(1),
@@ -140,6 +152,7 @@ export const AgentJournalItemBodySchema = z.discriminatedUnion('kind', [
     name: z.string(),
     // See the tool-call block: the key itself is lost when `input` is undefined.
     input: z.unknown().optional(),
+    callId: ProviderCallId.optional(),
     state: z.string().min(1),
     output: BoundedPayload.optional()
   }),
@@ -147,6 +160,11 @@ export const AgentJournalItemBodySchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('approval'),
     title: z.string(),
+    displayName: z.string().optional(),
+    description: z.string().optional(),
+    decisionReason: z.string().optional(),
+    blockedPath: z.string().optional(),
+    matchedAskRule: ApprovalMatchedAskRule.optional(),
     detail: z.string().nullable(),
     options: z.array(PromptOption),
     resolution: Resolution
@@ -164,8 +182,28 @@ export const AgentJournalItemBodySchema = z.discriminatedUnion('kind', [
     text: z.string(),
     presentation: z.string().optional(),
     tone: z.string().optional(),
-    turnLifecycle: z.object({ turnId: z.string(), state: z.string().min(1) }).optional(),
+    turnLifecycle: z
+      .object({
+        turnId: z.string(),
+        state: z.string().min(1),
+        userItemId: z.string().min(1).optional(),
+        startedAt: z.number().finite().positive().optional(),
+        requestedAt: z.number().finite().positive().optional(),
+        completedAt: z.number().finite().positive().optional(),
+        durationMs: z.number().finite().nonnegative().optional()
+      })
+      .optional(),
     providerFrame: ProviderFrame.optional()
+  }),
+  z.object({
+    kind: z.literal('turn'),
+    turnId: z.string(),
+    state: z.string().min(1),
+    userItemId: z.string().min(1).optional(),
+    startedAt: z.number().finite().positive().optional(),
+    requestedAt: z.number().finite().positive().optional(),
+    completedAt: z.number().finite().positive().optional(),
+    durationMs: z.number().finite().nonnegative().optional()
   })
 ])
 
@@ -186,7 +224,8 @@ export const AgentJournalSubmissionSchema = z.object({
   providerItemId: z.string().nullable(),
   reason: z.string().nullable(),
   submittedAt: z.number(),
-  resolvedAt: z.number().nullable()
+  resolvedAt: z.number().nullable(),
+  recovered: z.literal(true).optional()
 })
 
 export function isAdmissibleAgentJournalItemBody(value: unknown): value is AgentJournalItemBody {
@@ -216,7 +255,7 @@ export function isAdmissibleAgentJournalSubmission(
  *  never reject a row a writer in this build produced. The schemas are
  *  deliberately wider on open string fields, so only this direction holds. */
 type Admits<T extends true> = T
-export type CanonicalJournalShapesAreAdmissible = [
+export type CanonicalJournalTypesAreAdmissible = [
   Admits<AgentJournalItemBody extends z.input<typeof AgentJournalItemBodySchema> ? true : false>,
   Admits<AgentJournalMessageItem extends z.input<typeof MessageBody> ? true : false>,
   Admits<
