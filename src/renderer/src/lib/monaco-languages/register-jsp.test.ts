@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  tokenizeMonarchDocument,
+  tokenLanguagesPerLine,
+  tokenTypeAt
+} from './monarch-tokenizer-test-harness'
+import {
   jspHtmlModeConfiguration,
   jspLanguageConfiguration,
   jspMonarchLanguage,
@@ -343,8 +348,9 @@ describe('registerJspLanguage', () => {
           typeof action === 'object' ? action.switchTo : undefined
         ]
         targets.forEach((target) => {
-          if (target && target !== '@pop' && target !== '@popall') {
-            expect(declared).toContain(target.replace(/^@/, ''))
+          // `$Sn` targets resolve at runtime; `.param` suffixes name the same state.
+          if (target && target !== '@pop' && target !== '@popall' && !target.includes('$')) {
+            expect(declared).toContain(target.replace(/^@/, '').split('.')[0])
           }
         })
       })
@@ -361,5 +367,40 @@ describe('registerJspLanguage', () => {
 
     expect(bracketChars).not.toContain('<')
     expect(bracketChars).not.toContain('>')
+  })
+})
+
+// Driven through the real `MonarchTokenizer`: a rule-table walk cannot see
+// whether an island actually suspends the embed and resumes it afterwards.
+describe('jsp islands inside script and style bodies', () => {
+  const tokenizeJsp = (source: string) => tokenizeMonarchDocument('jsp', jspMonarchLanguage, source)
+
+  it('tokenizes EL and scriptlets inside a script body as JSP, then resumes javascript', () => {
+    const lines = tokenizeJsp(
+      [
+        '<script>',
+        '  const val = ${data};',
+        '  var n = <%= count %>',
+        '  run();',
+        '</script>'
+      ].join('\n')
+    )
+
+    expect(tokenLanguagesPerLine(lines)).toEqual([
+      ['jsp'],
+      ['javascript', 'jsp', 'javascript'],
+      ['javascript', 'jsp'],
+      ['javascript'],
+      ['jsp']
+    ])
+    expect(tokenTypeAt(lines[1], lines[1].text.indexOf('data'))).toBe('variable')
+    expect(tokenTypeAt(lines[2], lines[2].text.indexOf('count'))).toBe('identifier')
+  })
+
+  it('tokenizes EL inside a style body as JSP, then resumes css', () => {
+    const [line] = tokenizeJsp('<style>body { background: url(${ctx}/bg.png); }</style>')
+
+    expect(tokenLanguagesPerLine([line])).toEqual([['jsp', 'css', 'jsp', 'css', 'jsp']])
+    expect(tokenTypeAt(line, line.text.indexOf('ctx'))).toBe('variable')
   })
 })

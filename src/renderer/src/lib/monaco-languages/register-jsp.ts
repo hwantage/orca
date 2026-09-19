@@ -141,8 +141,26 @@ export const jspMonarchLanguage: Monaco.languages.IMonarchLanguage = {
       [/>/, { token: 'tag', switchTo: '@scriptBody', nextEmbedded: 'javascript' }],
       { include: '@tagRest' }
     ],
+    // Why: EL and scriptlets inside a script/style body must suspend the embed,
+    // or Monarch tokenizes them as JavaScript/CSS until the closing tag.
     scriptBody: [
-      [/<\/[sS][cC][rR][iI][pP][tT]\s*>/, { token: 'tag', next: '@pop', nextEmbedded: '@pop' }]
+      [/<\/[sS][cC][rR][iI][pP][tT]\s*>/, { token: 'tag', next: '@pop', nextEmbedded: '@pop' }],
+      [
+        /[$#]\{/,
+        {
+          token: 'delimiter.curly',
+          switchTo: '@embedEl.scriptBody.javascript',
+          nextEmbedded: '@pop'
+        }
+      ],
+      [
+        /<%[=!]?/,
+        {
+          token: 'metatag',
+          switchTo: '@embedScriptlet.scriptBody.javascript',
+          nextEmbedded: '@pop'
+        }
+      ]
     ],
 
     styleOpen: [
@@ -151,7 +169,25 @@ export const jspMonarchLanguage: Monaco.languages.IMonarchLanguage = {
       { include: '@tagRest' }
     ],
     styleBody: [
-      [/<\/[sS][tT][yY][lL][eE]\s*>/, { token: 'tag', next: '@pop', nextEmbedded: '@pop' }]
+      [/<\/[sS][tT][yY][lL][eE]\s*>/, { token: 'tag', next: '@pop', nextEmbedded: '@pop' }],
+      [
+        /[$#]\{/,
+        { token: 'delimiter.curly', switchTo: '@embedEl.styleBody.css', nextEmbedded: '@pop' }
+      ],
+      [
+        /<%[=!]?/,
+        { token: 'metatag', switchTo: '@embedScriptlet.styleBody.css', nextEmbedded: '@pop' }
+      ]
+    ],
+
+    // `$S2` is the body to return to, `$S3` the embed to resume there.
+    embedEl: [
+      [/\}/, { token: 'delimiter.curly', switchTo: '@$S2', nextEmbedded: '$S3' }],
+      { include: '@elExpression' }
+    ],
+    embedScriptlet: [
+      [/%>/, { token: 'metatag', switchTo: '@$S2', nextEmbedded: '$S3' }],
+      { include: '@jspScriptlet' }
     ]
   }
 }
