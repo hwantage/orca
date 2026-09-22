@@ -10,6 +10,7 @@ import { claudeStructuredAuthPolicyForSettings } from '../claude-accounts/claude
 import type { ClaudeManagedAccountGateSettings } from '../native-chat/claude-structured-managed-account-support'
 import {
   CLAUDE_DEFAULT_SETTING_SOURCES,
+  CLAUDE_SESSION_STATE_EVENTS_ENV,
   CLAUDE_STRUCTURED_BASE_OPTIONS,
   claudeSessionIdForOrcaSession,
   createClaudeStructuredLaunchResolver
@@ -122,11 +123,11 @@ describe('claude structured launch resolution', () => {
       supportedDialogKinds: [],
       extraArgs: { 'replay-user-messages': null },
       systemPrompt: { type: 'preset', preset: 'claude_code' },
-      permissionMode: 'default',
       sessionId: first.providerSessionId
     })
     expect(first.options.resume).toBeUndefined()
     expect(CLAUDE_STRUCTURED_BASE_OPTIONS.includePartialMessages).toBe(true)
+    expect(first.env).toMatchObject({ [CLAUDE_SESSION_STATE_EVENTS_ENV]: '1' })
   })
 
   it('resumes the session and leaf at the durable chain head', async () => {
@@ -153,6 +154,14 @@ describe('claude structured launch resolution', () => {
     expect(launch.options.resume).toBe('provider-current')
     expect(launch.options.resumeSessionAt).toBe('leaf-current')
     expect(launch.options.sessionId).toBeUndefined()
+  })
+
+  it('forces session-state events on when the inherited overlay disables them', async () => {
+    const launch = await resolverFor(record(), () => ({
+      [CLAUDE_SESSION_STATE_EVENTS_ENV]: '0'
+    }))({ identity: IDENTITY })
+
+    expect(launch.env).toMatchObject({ [CLAUDE_SESSION_STATE_EVENTS_ENV]: '1' })
   })
 
   it('refuses a durable journal leaf that diverged before resume resolution', async () => {
@@ -203,9 +212,12 @@ describe('claude structured launch resolution', () => {
   ])('starts a Yolo session in bypassPermissions for args %s', async (claude) => {
     const launch = await resolverFor(record(), undefined, false, { claude })({ identity: IDENTITY })
 
-    expect(launch.options.permissionMode).toBe('bypassPermissions')
-    // The SDK refuses bypassPermissions unless the allow flag rides with it.
-    expect(launch.options.allowDangerouslySkipPermissions).toBe(true)
+    expect(launch.options.extraArgs).toEqual({
+      'replay-user-messages': null,
+      'dangerously-skip-permissions': null
+    })
+    expect(launch.options.permissionMode).toBeUndefined()
+    expect(launch.options.allowDangerouslySkipPermissions).toBeUndefined()
   })
 
   // The common profile: the toggle has never been used, so it has written nothing, and the
@@ -214,8 +226,10 @@ describe('claude structured launch resolution', () => {
   it('starts a session that never opened Agent settings in bypassPermissions', async () => {
     const launch = await resolverFor(record(), undefined, false, {})({ identity: IDENTITY })
 
-    expect(launch.options.permissionMode).toBe('bypassPermissions')
-    expect(launch.options.allowDangerouslySkipPermissions).toBe(true)
+    expect(launch.options.extraArgs).toEqual({
+      'replay-user-messages': null,
+      'dangerously-skip-permissions': null
+    })
   })
 
   // Manual is stored as an empty string, which owns the key and so beats the shipped default.
@@ -226,7 +240,8 @@ describe('claude structured launch resolution', () => {
         identity: IDENTITY
       })
 
-      expect(launch.options.permissionMode).toBe('default')
+      expect(launch.options.permissionMode).toBeUndefined()
+      expect(launch.options.extraArgs).toEqual({ 'replay-user-messages': null })
       expect(launch.options.allowDangerouslySkipPermissions).toBeUndefined()
     }
   )
@@ -242,7 +257,7 @@ describe('claude structured launch resolution', () => {
 
     expect(launch.options.model).toBeUndefined()
     expect(launch.options.extraArgs).toEqual({ 'replay-user-messages': null })
-    expect(launch.options.permissionMode).toBe('default')
+    expect(launch.options.permissionMode).toBeUndefined()
   })
 
   it('keeps the session launch environment pinned after account settings change', async () => {

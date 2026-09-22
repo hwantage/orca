@@ -15,6 +15,7 @@ import type { CodexBackgroundTaskTracker } from './codex-background-task-tracker
 import type { CodexJournalTranslator } from './codex-structured-journal-translation'
 import type { CodexTurnProcessSnapshot } from './codex-structured-turn-processes'
 import type { StructuredAgentSessionLifecycleEvent } from '../native-chat/agent-session-wire/structured-agent-session-adapter'
+import type { CodexStructuredPermissionPolicy } from './codex-structured-permission-policy'
 
 export type CodexStructuredLaunch = {
   command: string
@@ -23,6 +24,7 @@ export type CodexStructuredLaunch = {
   codexHome: string | null
   resumeThreadId: string | null
   resumePath?: string | null
+  permissionPolicy?: CodexStructuredPermissionPolicy
   env?: Record<string, string>
 }
 
@@ -70,6 +72,9 @@ export type CodexStructuredSessionAdapterDeps = {
     clientMessageId: string
     providerIdentity: AgentJournalItemIdentity
   }) => void
+  /** Codex reported its thread not running with no turn open: a send whose
+   *  dispatch was never answered is owed nothing after this. */
+  onPrimaryThreadStoppedRunning?: (input: { sessionId: string }) => void
   openConnection?: typeof openCodexAppServerConnection
   readProcessStartTime?: (pid: number) => Promise<number | null>
   mintLinkId?: () => string
