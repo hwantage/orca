@@ -42,6 +42,7 @@ import {
   resolveDefaultBaseRefWithLocalGit
 } from '../git/repo'
 import { getBranchConflictKindViaExec } from '../git/repo-branch-conflict'
+import { WorktreeCreateCollisionError } from '../../shared/new-workspace/worktree-create-collision'
 import { resolveLocalGitUsername, getSshGitUsername } from '../git/git-username'
 import { hasCommitObjectViaGitExec } from '../git/commit-object-ref'
 import {
@@ -1990,7 +1991,7 @@ export async function createRemoteWorktree(
   }
   if (!remotePathResolved) {
     if (lastBranchConflictKind) {
-      throw new Error(
+      throw new WorktreeCreateCollisionError(
         `Branch "${branchName}" already exists ${lastBranchConflictKind === 'local' ? 'locally' : 'on a remote'}. Pick a different ${branchConflictSubject}.`
       )
     }
@@ -2104,6 +2105,8 @@ export async function createRemoteWorktree(
     }
     throw err
   }
+  // Why: the worktree is listable from here on; a scan that began before it appeared is overtaken.
+  runWorktreeChangeInvalidators(repo.id)
   if (sparseDirectories.length > 0) {
     try {
       // Why: SSH providers expose generic git exec, so remote sparse mirrors local addSparseWorktree without a new relay method.
@@ -2658,12 +2661,12 @@ async function performLocalWorktreeCreate(
     // narrowing does not reach the message.
     const existingReviewNumber = lastExistingReviewNumber
     if (existingReviewNumber !== null) {
-      throw new Error(
+      throw new WorktreeCreateCollisionError(
         `Branch "${branchName}" already has PR #${String(existingReviewNumber)}. Pick a different ${branchConflictSubject}.`
       )
     }
     if (lastBranchConflictKind) {
-      throw new Error(
+      throw new WorktreeCreateCollisionError(
         `Branch "${branchName}" already exists ${lastBranchConflictKind === 'local' ? 'locally' : 'on a remote'}. Pick a different ${branchConflictSubject}.`
       )
     }
@@ -2829,6 +2832,10 @@ async function performLocalWorktreeCreate(
     }
     throw error
   }
+  // Why: the worktree is listable from here on. Every scan that started earlier -- including a
+  // prepared checkout's, which listings hide while it is still locked -- now describes a catalog
+  // without it, and must not be served or cached as the current one.
+  runWorktreeChangeInvalidators(repo.id)
 
   // Why: fallible metadata work after creation must not leave a real workspace name reusable.
   if (shouldRetireGeneratedName) {

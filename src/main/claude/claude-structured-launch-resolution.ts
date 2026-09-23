@@ -28,6 +28,7 @@ import { resolveClaudeCommand } from '../codex-cli/command'
 import type { AgentSessionRecordStore } from '../runtime/agent-session-record-store'
 
 export const CLAUDE_DEFAULT_SETTING_SOURCES = ['user', 'project', 'local'] as const
+export const CLAUDE_SESSION_STATE_EVENTS_ENV = 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS'
 
 export type ClaudeStructuredSdkOptions = Pick<
   ClaudeAgentSdkOptions,
@@ -76,17 +77,13 @@ function cloneDefinedEnv(env: NodeJS.ProcessEnv | Record<string, string>): Recor
 /**
  * Agent Permissions as query-start options.
  *
- * The SDK refuses `bypassPermissions` unless the allow flag rides with it, so the two are built
- * here together and never emitted apart. The prompting mode is stated rather than left out: the
- * SDK fills an absent mode with `default` anyway, and saying so keeps the launch readable.
+ * The owned CLI flag preserves the user-installed binary contract. The SDK's typed bypass option
+ * emits a newer allow flag that older Claude binaries reject before a structured session starts.
  */
 export function claudeStructuredPermissionOptions(
   mode: PermissionMode
-): Pick<ClaudeStructuredSdkOptions, 'permissionMode' | 'allowDangerouslySkipPermissions'> {
-  return {
-    permissionMode: mode,
-    ...(mode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {})
-  }
+): Pick<ClaudeStructuredSdkOptions, 'extraArgs'> {
+  return mode === 'bypassPermissions' ? { extraArgs: { 'dangerously-skip-permissions': null } } : {}
 }
 
 export type ClaudeStructuredLaunch = {
@@ -196,7 +193,7 @@ export function createClaudeStructuredLaunchResolver(
         ? head.handle.sessionId
         : claudeSessionIdForOrcaSession(identity.sessionId)
     // `record.launchArgs` is deliberately not read: the configured CLI arguments are a terminal
-    // concern, and the permission mode they used to smuggle in is a typed option now.
+    // concern, and the permission mode they used to smuggle in is an owned provider option now.
     const permission = claudeStructuredPermissionOptions(
       (await deps.resolvePermissionMode?.()) ?? 'default'
     )
@@ -229,7 +226,9 @@ export function createClaudeStructuredLaunchResolver(
             platform: process.platform
           }
         ),
-        ...(overlay ? cloneDefinedEnv(overlay) : {})
+        ...(overlay ? cloneDefinedEnv(overlay) : {}),
+        // The turn translator relies on Claude's authoritative idle frame when no result arrives.
+        [CLAUDE_SESSION_STATE_EVENTS_ENV]: '1'
       }),
       { platform: process.platform }
     )
@@ -238,6 +237,7 @@ export function createClaudeStructuredLaunchResolver(
       options: {
         ...CLAUDE_STRUCTURED_BASE_OPTIONS,
         ...permission,
+        extraArgs: { ...CLAUDE_STRUCTURED_BASE_OPTIONS.extraArgs, ...permission.extraArgs },
         ...(head?.handle.provider === 'claude'
           ? {
               resume: providerSessionId,
