@@ -9,11 +9,13 @@ import { agentHookServer } from '../agent-hooks/server'
 import { wslHookRelayManager } from '../agent-hooks/wsl-hook-relay-manager'
 import { removeManagedAgentHooksAsync } from '../agent-hooks/managed-agent-hook-controls'
 import { stopStructuredAgentSessionRuntime } from '../runtime/structured-agent-session-runtime'
+import { setStructuredAgentSessionTeardownTrigger } from '../runtime/structured-agent-session-runtime-teardown'
 import { awaitRuntimeFileWatcherUnsubscribes } from '../runtime/orca-runtime-files'
 import { clearRuntimeMetadataIfOwned } from '../runtime/runtime-metadata'
 import { shutdownPairedRuntimeBrowserClientHosts } from '../browser/paired-runtime-browser-client-host-runtime'
 import { browserManager } from '../browser/browser-manager'
 import { stopCodexStateDbBackfillRecoveries } from '../codex/codex-state-db-backfill-recovery'
+import { awaitPackedRefsLockRelease } from '../git/local-repo-ref-maintenance'
 import { settleTeardownWithinDeadline, settleWithinMs } from '../quit-teardown-deadline'
 import { quitTeardownStartGate } from '../quit-teardown-start-gate'
 import { setUnreadDockBadgeCount } from '../dock/unread-badge'
@@ -23,6 +25,7 @@ import { shutdownObservability } from '../observability'
 import { isQuittingForUpdate } from '../updater'
 import { recordUpdaterLifecycle } from '../updater-lifecycle-diagnostics'
 import { stopTccPromptNotice } from '../macos-tcc-prompt-notice'
+import { cancelHistoryGc } from '../terminal-history-gc'
 import { shouldQuitWhenAllWindowsClosed } from './window-all-closed-quit-policy'
 import { mainProcessState as state } from './main-process-state'
 import { isDevParentShutdownRequested } from './configure-process'
@@ -33,6 +36,8 @@ let daemonDisconnectDone = false
 let watcherShutdownPromise: Promise<void> | null = null
 // Why 2s: a config delete is best-effort, not durable state.
 const GROK_HOOK_CLEANUP_DEADLINE_MS = 2_000
+// Why 2s: long enough for a `pack-refs` child to take SIGTERM and unlink its lock.
+const REF_MAINTENANCE_QUIT_DEADLINE_MS = 2_000
 
 function shutdownWatchersOnce(): Promise<void> {
   if (state.watcherShutdownDone) {
@@ -73,8 +78,15 @@ function installBeforeQuitHandler(): void {
     state.unsubscribeAgentAwakeStatusChanges = null
     state.agentAwakeService?.dispose()
     state.agentAwakeService = null
+    // Why wait but not uninstall: a renderer beforeunload can still veto this
+    // quit, and tearing the sweep down here would kill it for the rest of the
+    // session. `isQuitting` already vetoes new attempts; will-quit does the teardown.
+    state.repoMaintenanceShutdown = awaitPackedRefsLockRelease()
     // Why: defer PTY cleanup to will-quit so the renderer captures scrollback before PTY-exit events unmount TerminalPane (dropping its capture callbacks).
     state.rateLimits?.stop()
+    // Why safe on a vetoed quit: background history GC is idempotent and re-scheduled next launch,
+    // so abandoning the walk here only costs one deferred sweep, never a half-applied prune.
+    cancelHistoryGc()
   })
 }
 
@@ -94,6 +106,8 @@ function installWillQuitHandler(): void {
     if (!quitTeardownStartGate.tryStart(event)) {
       return
     }
+    // A renderer can veto before-quit; push must survive until quit is committed.
+    state.desktopPushService?.stop()
     state.unsubscribeSystemResumeBroadcast?.()
     state.unsubscribeSystemResumeBroadcast = null
     // Why: renderer guards can still cancel before this committed phase; `log stream` must survive those vetoes.
@@ -120,9 +134,22 @@ function installWillQuitHandler(): void {
     state.pluginMarketplaceInstaller = null
     const pluginHostShutdown = state.pluginService?.dispose() ?? Promise.resolve()
     const codexBackfillRecoveryShutdown = stopCodexStateDbBackfillRecoveries()
+    // Why before the stop: teardown stamps each working session's resume marker with why the app
+    // went away, and an update install is a restart the user never chose.
+    setStructuredAgentSessionTeardownTrigger(updateQuitInProgress ? 'update' : 'quit')
     const structuredAgentSessionShutdown = stopStructuredAgentSessionRuntime()
     state.pluginService = null
     setUnreadDockBadgeCount(0)
+    // Why wait rather than kill: the child finishes fine orphaned, and signalling
+    // it mid-prune strands a ref lock Git never clears. The wait is only for the
+    // short rewrite window, and is bounded so a quit can never hang on it.
+    const refMaintenanceShutdown = settleWithinMs(
+      Promise.all([state.repoMaintenanceShutdown, state.uninstallRepoMaintenanceIdleGate?.()]).then(
+        () => {}
+      ),
+      REF_MAINTENANCE_QUIT_DEADLINE_MS
+    ).then(() => {})
+    state.uninstallRepoMaintenanceIdleGate = null
     agentHookServer.stop()
     // Why Windows only: POSIX hooks short-circuit on ORCA_PANE_KEY, while Windows must register a
     // bare script path that cannot express the guard and would otherwise keep spawning after quit.
@@ -179,7 +206,8 @@ function installWillQuitHandler(): void {
     const usageCacheFlush = Promise.all([
       state.claudeUsage?.flush(),
       state.codexUsage?.flush(),
-      state.openCodeUsage?.flush()
+      state.openCodeUsage?.flush(),
+      state.museUsage?.flush()
     ]).then(() => {})
     const browserClientHostShutdown = shutdownPairedRuntimeBrowserClientHosts()
     const skillUploadShutdown = state.runtime?.disposeSkillUploadSessions() ?? Promise.resolve()
@@ -219,6 +247,7 @@ function installWillQuitHandler(): void {
       { name: 'plugin-hosts', promise: pluginHostShutdown },
       { name: 'skill-uploads', promise: skillUploadShutdown },
       { name: 'grok-hooks', promise: grokHookCleanup },
+      { name: 'ref-maintenance', promise: refMaintenanceShutdown },
       { name: 'codex-backfill-recovery', promise: codexBackfillRecoveryShutdown },
       { name: 'structured-agent-session', promise: structuredAgentSessionShutdown },
       { name: 'usage-cache', promise: usageCacheFlush },

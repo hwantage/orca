@@ -7,6 +7,7 @@ import {
   _setWslAvailabilityCacheForTests,
   dropStaleWslAvailabilityFailure
 } from './wsl-availability'
+import { resolveWslInteropSpawnCwd } from './wsl-interop-spawn-directory'
 import {
   _resetRunningWslDistroCacheForTests,
   resolveRunningWslDistros
@@ -15,7 +16,8 @@ import {
   getWslDirectoryProbeArgs,
   parseWslDirectoryProbeOutput
 } from './wsl-directory-probe-command'
-
+import { clearWslHomeCache, getCachedWslHome, rememberWslHome } from './wsl-home-cache'
+export { hasCachedWslHome } from './wsl-home-cache'
 // Why re-exported rather than defined here: the relay bundle needs the path
 // conversion without this module's distro-probing subprocess graph.
 export { toLinuxPath, toWindowsWslPath } from '../shared/wsl-paths'
@@ -25,21 +27,11 @@ export {
   isWslAvailable,
   isWslAvailableAsync
 } from './wsl-availability'
-
 export type WslPathInfo = {
   distro: string
   linuxPath: string
 }
-
-/**
- * Detect if a Windows path is a WSL UNC path and extract the distro name
- * and equivalent Linux path.
- *
- * Why: Windows exposes WSL filesystems as UNC paths under \\wsl.localhost\<Distro>\...
- * (modern) or \\wsl$\<Distro>\... (legacy). When a repo lives on a WSL filesystem,
- * native Windows git.exe is either absent or painfully slow — all process spawning
- * must be routed through `wsl.exe -d <distro>` with Linux-native paths instead.
- */
+/** Detect and parse a WSL UNC path on Windows. */
 export function parseWslPath(windowsPath: string): WslPathInfo | null {
   if (process.platform !== 'win32') {
     return null
@@ -76,7 +68,8 @@ export function wslUncDirectoryExists(uncPath: string): boolean | null {
     const stdout = execFileSync('wsl.exe', getWslDirectoryProbeArgs(info), {
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 5000,
-      encoding: 'utf8'
+      encoding: 'utf8',
+      cwd: resolveWslInteropSpawnCwd()
     })
     return parseWslDirectoryProbeOutput(stdout)
   } catch {
@@ -93,16 +86,14 @@ export function wslUncDirectoryExistsAsync(uncPath: string): Promise<boolean | n
     return Promise.resolve(null)
   }
   return new Promise((resolve) => {
-    execFile('wsl.exe', getWslDirectoryProbeArgs(info), { timeout: 5000 }, (_error, stdout) => {
+    const probeOpts = { timeout: 5000, cwd: resolveWslInteropSpawnCwd() }
+    execFile('wsl.exe', getWslDirectoryProbeArgs(info), probeOpts, (_error, stdout) => {
       // Why: wsl.exe uses numeric exits for both guest results and host failures; only the guest marker is authoritative.
       resolve(parseWslDirectoryProbeOutput(stdout))
     })
   })
 }
 
-// ─── WSL home directory resolution ──────────────────────────────────
-
-const wslHomeCache = new Map<string, string>()
 const wslHomeProbeCache = new Map<string, Promise<string | null>>()
 let wslDistroCache: string[] | null = null
 let wslDistroListInFlight: Promise<string[]> | null = null
@@ -115,6 +106,7 @@ let wslDistroListRetryAfterMs = 0
 let wslDistroListEmptyStreak = 0
 let wslDistroProbeSequence = 0
 let wslDistroCacheSequence = 0
+
 function armWslDistroListRetry(): void {
   const now = Date.now()
   // Concurrent completions belong to the retry window already armed by the first result.
@@ -181,7 +173,8 @@ export function listWslDistros(): string[] {
     const output = execFileSync('wsl.exe', ['--list', '--quiet'], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 5000
+      timeout: 5000,
+      cwd: resolveWslInteropSpawnCwd()
     })
     return cacheWslDistroList(parseWslDistros(output), probeSequence)
   } catch {
@@ -275,15 +268,17 @@ export function getDefaultWslDistro(): string | null {
  * WSL user's $HOME to compute that path.
  */
 export function getWslHome(distro: string): string | null {
-  if (wslHomeCache.has(distro)) {
-    return wslHomeCache.get(distro)!
+  const cachedHome = getCachedWslHome(distro)
+  if (cachedHome !== undefined) {
+    return cachedHome
   }
 
   try {
     const home = execFileSync('wsl.exe', ['-d', distro, '--exec', 'bash', '-c', 'echo $HOME'], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 5000
+      timeout: 5000,
+      cwd: resolveWslInteropSpawnCwd()
     }).trim()
 
     if (!home || !home.startsWith('/')) {
@@ -291,22 +286,17 @@ export function getWslHome(distro: string): string | null {
     }
 
     const uncPath = toWindowsWslPath(home, distro)
-    wslHomeCache.set(distro, uncPath)
-    return uncPath
+    return rememberWslHome(distro, uncPath)
   } catch {
     return null
   }
 }
 
-/** Pure cache lookup — never probes. Lets callers that memoize a derived value avoid caching one
- *  built from the unresolved fallback, since only the success path is cached above. */
-export function hasCachedWslHome(distro: string): boolean {
-  return wslHomeCache.has(distro)
-}
-
+/** Pure cache lookup — never probes. */
 export async function getWslHomeAsync(distro: string): Promise<string | null> {
-  if (wslHomeCache.has(distro)) {
-    return wslHomeCache.get(distro)!
+  const cachedHome = getCachedWslHome(distro)
+  if (cachedHome !== undefined) {
+    return cachedHome
   }
   const inflight = wslHomeProbeCache.get(distro)
   if (inflight) {
@@ -320,8 +310,7 @@ export async function getWslHomeAsync(distro: string): Promise<string | null> {
         return null
       }
       const uncPath = toWindowsWslPath(home, distro)
-      wslHomeCache.set(distro, uncPath)
-      return uncPath
+      return rememberWslHome(distro, uncPath)
     })
     .catch(() => null)
     .finally(() => {
@@ -353,7 +342,7 @@ function resetWslDistroListState(): void {
 }
 
 export function _resetWslCachesForTests(): void {
-  wslHomeCache.clear()
+  clearWslHomeCache()
   wslHomeProbeCache.clear()
   resetWslDistroListState()
   _resetRunningWslDistroCacheForTests()
@@ -382,7 +371,13 @@ function execFileUtf8(command: string, args: string[], env?: NodeJS.ProcessEnv):
     execFile(
       command,
       args,
-      { encoding: 'utf-8', env, timeout: 5000, windowsHide: true },
+      {
+        encoding: 'utf-8',
+        env,
+        timeout: 5000,
+        windowsHide: true,
+        cwd: resolveWslInteropSpawnCwd()
+      },
       (error, stdout) => {
         if (error) {
           reject(error)

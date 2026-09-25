@@ -56,6 +56,10 @@ const RETENTION_HELPER_SYMBOLS = [
 // Every place that decides whether a browser guest keeps painting, and the helper it must use.
 const RETENTION_SITES = new Map<string, readonly string[]>([
   ['components/TerminalWorkbenchContainer.tsx', ['useAnyBrowserGuestNeedsPaint']],
+  // The two outermost workbench wrappers: strict ancestors of every guest, so the per-worktree
+  // surface hatch below cannot rescue a guest either one parked with `hidden`.
+  ['components/TerminalSurface.tsx', ['useAnyBrowserGuestNeedsPaint']],
+  ['components/TerminalSplitWorkspaceSurfaces.tsx', ['useAnyBrowserGuestNeedsPaint']],
   ['components/TerminalWorktreeSplitSurface.tsx', ['useBrowserGuestPaintRetention']],
   [
     'components/browser-pane/assemble-chrome/BrowserPaneOverlayLayer.tsx',
@@ -90,12 +94,11 @@ const NON_RETENTION_TERM_READERS = new Map<string, readonly string[]>([
   ]
 ])
 
-// Writers, hydrators, the bridge installer and the idle sentinel: they set or seed a term rather
+// Writers, hydrators and the idle sentinel: they set or seed a term rather
 // than read it, so naming one is not a retention decision.
 const NON_READER_TERM_EXPORTS = [
   'acquireBrowserAutomationVisibility',
   'releaseBrowserAutomationVisibility',
-  'installBrowserAutomationVisibilityBridge',
   'setDriverForBrowserPage',
   'hydrateBrowserDrivers',
   'IDLE_BROWSER_DRIVER',

@@ -60,6 +60,10 @@ export type PtyReplayDataMeta = {
   snapshotSeq?: number
   alternateScreen?: boolean
   terminalOwner?: 'shell'
+  /** Grid the payload was serialized at. Present only when the producer proved
+   *  it; the drain replays there and fits back to the pane afterwards. */
+  snapshotCols?: number
+  snapshotRows?: number
 }
 
 export type LocalPtySessionMetadata = {
@@ -69,6 +73,8 @@ export type LocalPtySessionMetadata = {
 
 export type PtyConnectResult = {
   id: string
+  /** Host-owned PTY incarnation used to fence remote identity observations. */
+  incarnationId?: string
   /** The requested session exited while it had no primary pane handler. Its
    *  buffered final data/exit were delivered, so callers must not fresh-spawn. */
   exitedBeforeAttach?: boolean
@@ -139,6 +145,7 @@ export type PtyTransportRecoveryState = {
 }
 
 export type PtyTransport = {
+  getPendingEscapeTailAnsi?: () => string
   connect: (options: {
     url: string
     cols?: number
@@ -158,6 +165,9 @@ export type PtyTransport = {
     launchToken?: string
     launchAgent?: TuiAgent
     startupCommandDelivery?: StartupCommandDelivery
+    /** Taken only as the spawn request is sent; main stops the returned PTY before resolving the
+     *  pane's owner. Never taken on a session reattach, so the caller still holds it. */
+    claimReplacedPtyId?: () => string | null
     /** Reject a stale restored identity before this transport can publish global PTY handlers. */
     admitPtyId?: (ptyId: string) => boolean
     /** Reject a stale pane after any pre-spawn test gate but before creating a PTY. */
@@ -226,7 +236,10 @@ export type PtyTransport = {
    *  it also drops the transport's output processor from the pty side-effect memory census,
    *  so a reattached one would run untracked. Create a new transport instead. */
   detach?: (options?: { preserveExitObserver?: boolean }) => void
-  destroy?: () => void | Promise<void>
+  destroy?: (options?: {
+    /** Explicit close can retain retirement intent until an unbound connect settles. */
+    onAbandonedConnect?: (ptyId: string) => boolean
+  }) => void | Promise<void>
 }
 
 export type IpcPtyTransportOptions = {
@@ -259,13 +272,14 @@ export type IpcPtyTransportOptions = {
   activate?: boolean
   shellOverride?: string
   projectRuntime?: ProjectExecutionRuntimeResolution
+  terminalKittyKeyboardProtocol?: boolean
   terminalColorQueryReplies?: TerminalOscColorQueryReplyColors
   telemetry?: EventProps<'agent_started'>
   onPtyExit?: (ptyId: string, exitCode?: number) => void
   onTitleChange?: (title: string, rawTitle: string) => void
   onPtySpawn?: (ptyId: string) => void
   /** Rebind an existing pane after its provider replaces the PTY identity. */
-  onPtyRebind?: (ptyId: string, replacedPtyId: string) => void
+  onPtyRebind?: (ptyId: string, replacedPtyId: string, incarnationId?: string | null) => void
   onBell?: () => void
   onAgentBecameIdle?: (title: string) => void
   onAgentBecameWorking?: () => void

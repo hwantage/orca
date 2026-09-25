@@ -16,7 +16,7 @@ import {
   getRuntimeLeafIdsForTerminal,
   resolveMobileTabWideAgentHintLeafId,
   isUnifiedTabActiveInActiveGroup
-} from './mobile-session-tab-helpers'
+} from './mobile-session-surfaces'
 import { resolveRuntimeTerminalTitle } from './sync-projections'
 import { resolveTerminalLayoutRoot } from '../remote-terminal-layout-resolution'
 
@@ -49,7 +49,7 @@ export function buildMobileTerminalSurfaceTabs(
       leafIds,
       onSynthesize: (leafCount) =>
         console.warn(
-          `[sync-runtime-graph] synthesized parentLayout for ${leafCount} leaves with no live or saved tree`
+          `[sync-runtime-graph] synthesized a parentLayout split direction for ${leafCount} leaves no live or saved tree placed`
         )
     }),
     activeLeafId,

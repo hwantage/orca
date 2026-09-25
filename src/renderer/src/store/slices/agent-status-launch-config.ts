@@ -9,7 +9,7 @@ import type {
   AgentLaunchConfigRegistryEntry,
   AgentLaunchConfigRegistrationMetadata
 } from './agent-status-contract'
-import { getLeafIdFromPaneKey, getTabIdFromPaneKey } from './agent-status-pane-helpers'
+import { getLeafIdFromPaneKey, getTabIdFromPaneKey } from './agent-status-pane-key-tab-binding'
 import { launchConfigsEqual } from './agent-status-recovery-equivalence'
 
 export function normalizeLaunchConfigRegistrationMetadata(

@@ -2,13 +2,16 @@ import { useEffect } from 'react'
 import { useAppStore } from '../store'
 import {
   TERMINAL_HIDDEN_WORKTREE_RETENTION_TTL_MS,
+  countEvictionExemptTabRoutes,
+  formatEvictionExemptRouteCounts,
   hasPendingRetentionSpawnWork,
   selectForceParkEvictableTabIds,
   selectRetentionForceParkedTerminalWorktrees,
   type TerminalWorktreeRetentionCandidate
 } from './terminal-pane/terminal-hidden-worktree-retention'
+import { recordRendererCrashBreadcrumb } from '@/lib/crash-breadcrumb-recorder'
 import { selectEvictionExemptTerminalTabIds } from './terminal-pane/terminal-eviction-exempt-tabs'
-import { captureForceParkedWorktreeBuffers } from './terminal-pane/force-park-buffer-capture'
+import { captureParkedTerminalBuffers } from './terminal-pane/parked-terminal-buffer-capture'
 import { warnTerminalLifecycleAnomaly } from './terminal-pane/terminal-lifecycle-diagnostics'
 import { recordTerminalWorktreeParkingDebugVerdicts } from './terminal-pane/terminal-parking-e2e-overrides'
 import { getTerminalWorktreeColdParkRecheckDelayMs } from './terminal-pane/terminal-cold-park-recheck-deadlines'
@@ -24,7 +27,7 @@ export function useTerminalParkingPass(controller: TerminalParkingFoundation): v
     activeView,
     activityTerminalPortals,
     backgroundMountRevision,
-    forceParkedCaptureDoneRef,
+    parkedCaptureDoneRef,
     pairedRuntimeParkingEnvironmentIds,
     pendingStartupByTabId,
     renderedActiveWorktreeId,
@@ -38,7 +41,7 @@ export function useTerminalParkingPass(controller: TerminalParkingFoundation): v
     terminalProviderSnapshotCapabilityRevision,
     terminalRetentionBudgetEnabled,
     terminalSshParkingEnabled,
-    workspaceSurfaces
+    workspaceSurfaceIds
   } = controller
 
   useEffect(() => {
@@ -73,13 +76,34 @@ export function useTerminalParkingPass(controller: TerminalParkingFoundation): v
         forceParked: forceParkedWorktreeIds.has(candidate.worktreeId)
       }))
     )
-    const capturedForceParked = forceParkedCaptureDoneRef.current
-    for (const id of Array.from(capturedForceParked)) {
-      if (!forceParkedWorktreeIds.has(id)) {
-        capturedForceParked.delete(id)
+    const capturedParked = parkedCaptureDoneRef.current
+    for (const id of Array.from(capturedParked)) {
+      if (!forceParkedWorktreeIds.has(id) && !pass.nextParkedTerminalWorktreeIds.has(id)) {
+        capturedParked.delete(id)
       }
     }
     const repos = useAppStore.getState().repos
+    // Why before the commit: the panes are still mounted in this flush, so this is the last moment
+    // a remote-runtime pane's xterm — the only client-side copy of its scrollback — can be
+    // serialized. The paired-parking capability that licenses the unmount says nothing about
+    // whether the host retained this pty's buffer, so the park must not leave the client with
+    // nothing to fall back on. Force-parks capture below with their eviction-exempt carve-out.
+    // Why localOnly: the ordinary park is the every-hide cadence; its bytes stay off the upload.
+    for (const worktreeId of pass.nextParkedTerminalWorktreeIds) {
+      if (capturedParked.has(worktreeId)) {
+        continue
+      }
+      if (
+        captureParkedTerminalBuffers({
+          worktreeId,
+          tabIds: (tabsByWorktree[worktreeId] ?? []).map((tab) => tab.id),
+          repos,
+          localOnly: true
+        })
+      ) {
+        capturedParked.add(worktreeId)
+      }
+    }
     const nextEvictionExemptTabIds = new Set<string>()
     for (const worktreeId of forceParkedWorktreeIds) {
       const forceParkedTabs = tabsByWorktree[worktreeId] ?? []
@@ -87,24 +111,34 @@ export function useTerminalParkingPass(controller: TerminalParkingFoundation): v
       for (const tabId of exemptTabIds) {
         nextEvictionExemptTabIds.add(tabId)
       }
-      if (!capturedForceParked.has(worktreeId)) {
+      if (!capturedParked.has(worktreeId)) {
         const evictableTabIds = selectForceParkEvictableTabIds(forceParkedTabs, (tab) =>
           exemptTabIds.has(tab.id)
         )
+        // Why routed + breadcrumbed: only per-route counts in a field bundle
+        // can say whether fail-open ids or unresolved snapshot capability
+        // dominates the degenerate all-exempt force-park (which frees no heap).
         if (evictableTabIds.length === 0 && forceParkedTabs.length > 0) {
+          const exemptRouteCounts = countEvictionExemptTabRoutes(forceParkedTabs, worktreeId)
           warnTerminalLifecycleAnomaly('retention force-park freed no panes', {
             worktreeId,
-            reason: `exemptTabs=${forceParkedTabs.length}`
+            reason: `exemptTabs=${forceParkedTabs.length} ${formatEvictionExemptRouteCounts(exemptRouteCounts)}`
+          })
+          recordRendererCrashBreadcrumb('terminal_force_park_freed_no_panes', {
+            exemptTabs: forceParkedTabs.length,
+            ...exemptRouteCounts
           })
         }
+        // Why shared: a force-park is rare, and its copy is what a second desktop cold-restores from.
         if (
-          captureForceParkedWorktreeBuffers({
+          captureParkedTerminalBuffers({
             worktreeId,
             tabIds: evictableTabIds,
-            repos
+            repos,
+            localOnly: false
           })
         ) {
-          capturedForceParked.add(worktreeId)
+          capturedParked.add(worktreeId)
         }
       }
       pass.nextParkedTerminalWorktreeIds.add(worktreeId)
@@ -171,6 +205,6 @@ export function useTerminalParkingPass(controller: TerminalParkingFoundation): v
     terminalProviderSnapshotCapabilityRevision,
     terminalRetentionBudgetEnabled,
     terminalSshParkingEnabled,
-    workspaceSurfaces
+    workspaceSurfaceIds
   ])
 }

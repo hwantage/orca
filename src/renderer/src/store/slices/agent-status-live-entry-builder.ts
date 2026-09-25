@@ -1,9 +1,9 @@
 import type { AppState } from '../types'
+import { resolveAgentStatusLiveEntryMainAgent } from './agent-status-live-entry-main-agent'
+import { resolveAgentStatusLiveEntryStateHistory } from './agent-status-live-entry-state-history'
 import {
-  AGENT_STATE_HISTORY_MAX,
   agentSubagentsEqual,
   type MigrationUnsupportedPtyEntry,
-  type AgentStateHistoryEntry,
   type AgentStatusEntry
 } from '../../../../shared/agent-status-types'
 import {
@@ -26,8 +26,8 @@ import type {
   AgentStatusTiming
 } from './agent-status-contract'
 import { registryEntryMatchesStatus } from './agent-status-launch-config'
-import { findAgentPaneWorktreeId, getTabIdFromPaneKey } from './agent-status-pane-helpers'
-import { mergeCurrentOrchestrationContext } from './agent-status-map-helpers'
+import { findAgentPaneWorktreeId, getTabIdFromPaneKey } from './agent-status-pane-key-tab-binding'
+import { mergeCurrentOrchestrationContext } from './agent-status-orchestration-context'
 import { deriveAgentStatusLiveFacts } from './agent-status-live-facts'
 
 export type AgentStatusLiveEntryBuild = {
@@ -52,6 +52,11 @@ export type AgentStatusLiveEntryBuild = {
   boundaryResolved: boolean
 }
 
+export type AgentStatusLiveEntryRejection = {
+  entry: null
+  reason: 'stale' | 'suppressed-inherited-terminal'
+}
+
 export type AgentStatusLiveEntryArgs = {
   state: AppState
   paneKey: string
@@ -63,44 +68,18 @@ export type AgentStatusLiveEntryArgs = {
   updatedAt: number
 }
 
-/** Build one accepted live row and the derived map-update facts. */
+/** Build one accepted live row and the derived map-update facts, or say why the frame was rejected. */
 export function buildAgentStatusLiveEntry(
   args: AgentStatusLiveEntryArgs
-): AgentStatusLiveEntryBuild | null {
+): AgentStatusLiveEntryBuild | AgentStatusLiveEntryRejection {
   const { state, paneKey, payload, terminalTitle, timing, routing, metadata, updatedAt } = args
   const existing = state.agentStatusByPaneKey[paneKey]
-  if (existing && updatedAt < existing.updatedAt) {
-    return null
+  if (existing && updatedAt < existing.updatedAt && !timing?.allowOlderTimestamp) {
+    return { entry: null, reason: 'stale' }
   }
   const effectiveTitle = terminalTitle ?? existing?.terminalTitle
-  let history: AgentStateHistoryEntry[] = existing?.stateHistory ?? []
-  let lastCompletedAssistantMessage = existing?.lastCompletedAssistantMessage
-  const boundaryLandsOnRealDone =
-    existing?.state === 'done' &&
-    existing.sessionBoundary !== true &&
-    payload.state === 'done' &&
-    payload.sessionBoundary === true
-  if (
-    existing &&
-    (existing.state !== payload.state || boundaryLandsOnRealDone) &&
-    !(existing.state === 'done' && existing.sessionBoundary === true)
-  ) {
-    history = [
-      ...history,
-      {
-        state: existing.state,
-        prompt: existing.prompt,
-        startedAt: existing.stateStartedAt,
-        interrupted: existing.interrupted
-      }
-    ]
-    if (history.length > AGENT_STATE_HISTORY_MAX) {
-      history = history.slice(history.length - AGENT_STATE_HISTORY_MAX)
-    }
-    if (existing.state === 'done') {
-      lastCompletedAssistantMessage = existing.lastAssistantMessage
-    }
-  }
+  const { history, lastCompletedAssistantMessage, stateObservedAt } =
+    resolveAgentStatusLiveEntryStateHistory(existing, payload, updatedAt)
   const identity = resolveAgentStatusIdentity({
     existing: existing
       ? {
@@ -141,7 +120,7 @@ export function buildAgentStatusLiveEntry(
       incomingState: payload.state
     })
   ) {
-    return null
+    return { entry: null, reason: 'suppressed-inherited-terminal' }
   }
   const runtimeOrchestration = state.runtimeAgentOrchestrationByPaneKey[paneKey]
   const runtimeMergedOrchestration = runtimeOrchestration
@@ -212,15 +191,24 @@ export function buildAgentStatusLiveEntry(
       : undefined) ??
     matchedRegistryLaunchConfig ??
     matchedSleepingLaunchConfig
+  const mainAgent = resolveAgentStatusLiveEntryMainAgent(existing, payload, identity.agentType)
   const entry: AgentStatusEntry = {
     state: payload.state,
     workingMode: payload.workingMode,
     prompt: payload.prompt,
     updatedAt,
+    // Why: a writer that carries no observation clock (OSC bytes, launch seeds) is itself
+    // fresh evidence, so it must not inherit the previous row's older observation time.
+    ...(timing?.evidenceObservedAt !== undefined
+      ? { evidenceObservedAt: timing.evidenceObservedAt }
+      : {}),
+    ...(metadata?.structuredHostOwned === true ? { structuredHostOwned: true as const } : {}),
     stateStartedAt,
+    stateObservedAt,
     agentType: identity.agentType,
     model:
       payload.model ?? (existing?.agentType === identity.agentType ? existing.model : undefined),
+    ...(payload.modelSwitchCommand ? { modelSwitchCommand: payload.modelSwitchCommand } : {}),
     paneKey,
     terminalHandle: statusTerminalHandle,
     worktreeId:
@@ -245,9 +233,11 @@ export function buildAgentStatusLiveEntry(
     lastAssistantMessageIsToolOutput: payload.lastAssistantMessageIsToolOutput,
     ...(lastCompletedAssistantMessage ? { lastCompletedAssistantMessage } : {}),
     orchestration,
+    ...(payload.subagentObservation ? { subagentObservation: payload.subagentObservation } : {}),
     subagents: agentSubagentsEqual(existing?.subagents, payload.subagents)
       ? existing?.subagents
       : payload.subagents,
+    ...(mainAgent ? { mainAgent } : {}),
     ...(providerSession ? { providerSession } : {}),
     ...(metadata?.terminalResumeEligible === false
       ? { terminalResumeEligible: false as const }

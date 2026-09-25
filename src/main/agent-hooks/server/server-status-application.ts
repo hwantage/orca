@@ -9,14 +9,90 @@ import type {
   AgentStatusObservation,
   AgentStatusObservationOrigin
 } from '../../../shared/agent-status-observation'
+import { AGENT_STATUS_2A_CURRENT_PRODUCER_MODE } from '../../../shared/agent-status-legacy-adapter'
+import { admitLegacyAgentStatus } from '../../../shared/agent-hook-listener/listener-state'
 import type { EnrichedAgentHookEventPayload } from './server-types'
 import { agentTypeToPromptSentAgentKind } from './server-status-identity'
 import { AgentHookServerStatusDisposition } from './server-status-disposition'
 
+/** Bounds the retained observation clock; eviction only degrades a replay to `now`. */
+const MAX_REMEMBERED_EVIDENCE_OBSERVATIONS = 1024
+
 export abstract class AgentHookServerStatusApplication extends AgentHookServerStatusDisposition {
+  protected refreshTerminalStatusEvidence(
+    previous: EnrichedAgentHookEventPayload,
+    mutationBefore?: EnrichedAgentHookEventPayload,
+    emitEnrichedStatus = false
+  ): void {
+    if (!this.canWriteLegacyStatusRow(previous)) {
+      return
+    }
+    const connectionClearWatermark = previous.connectionId
+      ? this.connectionTimestampWatermarkById.get(previous.connectionId)
+      : undefined
+    const now = Math.max(Date.now(), (connectionClearWatermark ?? -1) + 1)
+    if (previous.connectionId) {
+      this.connectionTimestampWatermarkById.set(previous.connectionId, now)
+    }
+    const {
+      receivedAt: _receivedAt,
+      evidenceObservedAt: _evidenceObservedAt,
+      stateStartedAt,
+      observation: _observation,
+      restoredUnconfirmed: _restoredUnconfirmed,
+      isReplay: _isReplay,
+      ...payload
+    } = previous
+    const refreshed: EnrichedAgentHookEventPayload = {
+      ...payload,
+      receivedAt: now,
+      evidenceObservedAt: now,
+      stateStartedAt,
+      observation: this.stampObservation(payload, 'osc', now)
+    }
+    const firstRuntimeObservation = !this.runtimeObservedStatusPaneKeys.has(refreshed.paneKey)
+    this.runtimeObservedStatusPaneKeys.add(refreshed.paneKey)
+    if (!this.writeLegacyStatusRow(refreshed)) {
+      return
+    }
+    this.commitStatusRowMutation(mutationBefore ?? previous, refreshed)
+    this.scheduleStatusPersist()
+    // A dismissed row may retain only provider resume identity. Its preserved payload can still
+    // read `working`, but it is deliberately hidden from live readers and must not renew awake or
+    // mobile freshness leases.
+    if (refreshed.providerSessionOnly === true) {
+      return
+    }
+    if (firstRuntimeObservation) {
+      this.notifyStatusChangeListeners()
+    }
+    this.emitStatusFreshnessObservation({
+      paneKey: refreshed.paneKey,
+      state: refreshed.payload.state,
+      receivedAt: refreshed.receivedAt,
+      observedInCurrentRuntime: true,
+      ...(refreshed.worktreeId ? { worktreeId: refreshed.worktreeId } : {}),
+      ...(refreshed.terminalHandle ? { terminalHandle: refreshed.terminalHandle } : {})
+    })
+    if (emitEnrichedStatus) {
+      this.emitEnrichedStatus(refreshed)
+    }
+  }
+
+  protected writeLegacyStatusRow(entry: EnrichedAgentHookEventPayload): boolean {
+    return admitLegacyAgentStatus(
+      this.state,
+      'main-status-update',
+      entry,
+      AGENT_STATUS_2A_CURRENT_PRODUCER_MODE
+    )
+  }
+  /** `observedAt` is the producer's own clock for evidence that has one (a session journal); it
+   *  stamps the evidence and state-start times while `receivedAt` keeps delivery order. */
   protected attachStatusTiming(
     payload: AgentHookEventPayload,
-    now = Date.now()
+    now = Date.now(),
+    observedAt?: number
   ): EnrichedAgentHookEventPayload {
     const previous = this.state.lastStatusByPaneKey.get(payload.paneKey) as
       | EnrichedAgentHookEventPayload
@@ -36,13 +112,41 @@ export abstract class AgentHookServerStatusApplication extends AgentHookServerSt
     const stateStartedAt =
       previous && previous.payload.state === payload.payload.state && !commandCodeNewTurn
         ? previous.stateStartedAt
-        : now
+        : (observedAt ?? now)
     // Why: `stateStartedAt` tracks the current state, while `receivedAt` tracks every arrival.
     return {
       ...payload,
       receivedAt: now,
+      evidenceObservedAt: observedAt ?? this.resolveEvidenceObservedAt(payload, previous, now),
       stateStartedAt
     }
+  }
+
+  /**
+   * A replay restates evidence already observed; it is not a new observation. Keeping
+   * `receivedAt` at `now` preserves delivery order (the connection-clear watermark and the
+   * renderer's four `<` drops all depend on it), while this clock records when the evidence
+   * was actually seen — so the staleness window measures age, not reconnect count.
+   * Without a remembered time the honest answer is `now`, which is today's behaviour.
+   */
+  private resolveEvidenceObservedAt(
+    payload: AgentHookEventPayload,
+    previous: EnrichedAgentHookEventPayload | undefined,
+    now: number
+  ): number {
+    const remembered =
+      previous?.evidenceObservedAt ?? this.evidenceObservedAtByPaneKey.get(payload.paneKey)
+    const observedAt = payload.isReplay === true && remembered !== undefined ? remembered : now
+    this.evidenceObservedAtByPaneKey.delete(payload.paneKey)
+    this.evidenceObservedAtByPaneKey.set(payload.paneKey, observedAt)
+    while (this.evidenceObservedAtByPaneKey.size > MAX_REMEMBERED_EVIDENCE_OBSERVATIONS) {
+      const oldest = this.evidenceObservedAtByPaneKey.keys().next().value
+      if (typeof oldest !== 'string') {
+        break
+      }
+      this.evidenceObservedAtByPaneKey.delete(oldest)
+    }
+    return observedAt
   }
 
   protected hashPromptForTelemetryDedupe(prompt: string): string {

@@ -59,6 +59,8 @@ const EXPECTED_GITHUB_IPC_CHANNELS = [
   'gh:starOrca',
   'gh:rateLimit',
   'gh:diagnoseAuth',
+  'gh:listBindableAccounts',
+  'gh:validateAccountBinding',
   'gh:listAccessibleProjects',
   'gh:resolveProjectRef',
   'gh:listProjectViews',
@@ -88,8 +90,8 @@ describe('GitHub IPC channel parity', () => {
     // The preload facade now composes the two GitHub bridge owners; inspect
     // both owners so the channel census remains tied to the actual invokes.
     const preloadSource = [
-      '../../preload/api/gh-bridge-part-1.ts',
-      '../../preload/api/gh-bridge-part-2.ts'
+      '../../preload/api/gh-bridge-pull-requests-and-work-items.ts',
+      '../../preload/api/gh-bridge-mutations-and-projects.ts'
     ]
       .map((relativePath) => readFileSync(new URL(relativePath, import.meta.url), 'utf8'))
       .join('\n')

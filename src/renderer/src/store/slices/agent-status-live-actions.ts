@@ -1,3 +1,4 @@
+import { resolvePaneKey } from '../../lib/agent-status-pane-ownership'
 import type { AgentStatusSlice } from './agent-status-slice-contract'
 import type { AgentStatusRuntime } from './agent-status-runtime'
 import type {
@@ -6,17 +7,22 @@ import type {
   AgentStatusRouting,
   AgentStatusTiming
 } from './agent-status-contract'
-import { resolveAgentPaneAuthorityKey } from './agent-pane-authority'
+import {
+  resolveAgentPaneAuthorityKey,
+  transferAgentPaneAuthorityAlias
+} from './agent-pane-authority'
 import {
   buildAgentStatusLiveEntry,
-  type AgentStatusLiveEntryBuild
+  type AgentStatusLiveEntryBuild,
+  type AgentStatusLiveEntryRejection
 } from './agent-status-live-entry-builder'
 import { reduceAgentStatusLiveUpdate } from './agent-status-live-reducer'
+import type { FreshnessLiveEntryDelta } from './agent-status-freshness-scheduler'
 import {
   agentStatusTabAlreadyHasProtectedOrGeneratedTitle,
   getTabIdFromPaneKey,
   isRecentlyClosedAgentStatusTab
-} from './agent-status-pane-helpers'
+} from './agent-status-pane-key-tab-binding'
 import {
   getAgentRowGeneratedTitleText,
   getOrcaDispatchTaskId,
@@ -27,8 +33,14 @@ import {
 export function createAgentStatusLiveActions(
   runtime: AgentStatusRuntime
 ): Pick<AgentStatusSlice, 'setAgentStatus' | 'setAgentStatuses' | 'transactAgentStatuses'> {
-  const { get, set, applyGeneratedTabTitleUpdate, requestFreshness, transactAgentStatuses } =
-    runtime
+  const {
+    get,
+    set,
+    applyGeneratedTabTitleUpdate,
+    freshness,
+    requestFreshness,
+    transactAgentStatuses
+  } = runtime
   const setAgentStatus = (
     rawPaneKey: string,
     payload: AgentStatusPayload,
@@ -38,10 +50,15 @@ export function createAgentStatusLiveActions(
     metadata?: AgentStatusMetadata
   ): void => {
     const paneKey = resolveAgentPaneAuthorityKey(rawPaneKey)
+    if (metadata?.authorityRestartId && paneKey !== rawPaneKey) {
+      return
+    }
     const updatedAt = timing?.updatedAt ?? Date.now()
     const current = get()
     if (
-      paneKey in current.recentlyRetiredAgentStatusPaneKeys ||
+      (paneKey in current.recentlyRetiredAgentStatusPaneKeys &&
+        (typeof current.recentlyRetiredAgentStatusPaneKeys[paneKey] !== 'string' ||
+          current.recentlyRetiredAgentStatusPaneKeys[paneKey] !== metadata?.authorityRestartId)) ||
       isRecentlyClosedAgentStatusTab(
         current.recentlyClosedAgentStatusTabIds,
         getTabIdFromPaneKey(paneKey)
@@ -49,8 +66,33 @@ export function createAgentStatusLiveActions(
     ) {
       return
     }
-    let built: AgentStatusLiveEntryBuild | null = null
+    let built: AgentStatusLiveEntryBuild | AgentStatusLiveEntryRejection | null = null
+    let liveEntryDelta: FreshnessLiveEntryDelta | null = null
     set((state) => {
+      const retirement = state.recentlyRetiredAgentStatusPaneKeys[paneKey]
+      if (
+        (retirement !== undefined &&
+          (typeof retirement !== 'string' || retirement !== metadata?.authorityRestartId)) ||
+        isRecentlyClosedAgentStatusTab(
+          state.recentlyClosedAgentStatusTabIds,
+          getTabIdFromPaneKey(paneKey)
+        )
+      ) {
+        return state
+      }
+      if (retirement !== undefined) {
+        const owner = resolvePaneKey(state, paneKey)
+        if (
+          !owner.exists ||
+          payload.agentType !== 'omp' ||
+          (routing?.worktreeId !== undefined && routing.worktreeId !== owner.owningWorktreeId) ||
+          (routing?.connectionId !== undefined &&
+            routing.connectionId !== owner.repoConnectionId &&
+            (owner.repoConnectionResolved || routing.worktreeId !== owner.owningWorktreeId))
+        ) {
+          return state
+        }
+      }
       built = buildAgentStatusLiveEntry({
         state,
         paneKey,
@@ -61,14 +103,42 @@ export function createAgentStatusLiveActions(
         metadata,
         updatedAt
       })
-      return built ? reduceAgentStatusLiveUpdate(state, built, updatedAt) : state
+      if (!built.entry) {
+        return state
+      }
+      const previousEntries = state.agentStatusByPaneKey
+      const reduction = reduceAgentStatusLiveUpdate(state, built, updatedAt)
+      liveEntryDelta = {
+        previousEntries,
+        nextEntries: reduction.patch.agentStatusByPaneKey ?? previousEntries,
+        nextEntry: built.entry,
+        replacedEntry: previousEntries[built.entry.paneKey],
+        evictedEntries: reduction.evictedEntries
+      }
+      if (retirement !== undefined) {
+        // The host confirmed this retired group’s surviving owner; preserve that route for its next retirement.
+        for (const [key, id] of Object.entries(state.recentlyRetiredAgentStatusPaneKeys)) {
+          if (id === retirement && key !== paneKey && resolveAgentPaneAuthorityKey(key) === key) {
+            transferAgentPaneAuthorityAlias({ fromPaneKey: key, toPaneKey: paneKey })
+          }
+        }
+        const nextRetired = { ...state.recentlyRetiredAgentStatusPaneKeys }
+        delete nextRetired[paneKey]
+        return { ...reduction.patch, recentlyRetiredAgentStatusPaneKeys: nextRetired }
+      }
+      return reduction.patch
     })
+    if (liveEntryDelta) {
+      freshness.noteLiveEntryDelta(liveEntryDelta)
+    }
     // Zustand's updater runs synchronously, but TypeScript cannot observe the closure assignment.
-    const builtResult = built as AgentStatusLiveEntryBuild | null
-    if (!builtResult) {
-      // Keep standalone calls' deferred freshness contract even when a stale
-      // event is rejected by the reducer.
-      requestFreshness(false)
+    const builtResult = built as AgentStatusLiveEntryBuild | AgentStatusLiveEntryRejection | null
+    if (!builtResult?.entry) {
+      // Keep standalone calls' deferred freshness contract when a stale event is rejected, but a
+      // suppressed inherited-terminal frame returns without buying the deferred O(entries) scan.
+      if (builtResult?.reason !== 'suppressed-inherited-terminal') {
+        requestFreshness(false)
+      }
       return
     }
     const { entry } = builtResult

@@ -9,7 +9,6 @@ import type {
   BrowserPage,
   BrowserPageDocLocation,
   BrowserSessionProfile,
-  BrowserSessionProfileCreateOptions,
   BrowserViewportPresetId,
   BrowserWorkspace
 } from '../../../../../shared/browser-workspace-types'
@@ -193,6 +192,10 @@ export type BrowserSlice = {
   ) => void
   deleteBrowserPageAnnotation: (pageId: string, annotationId: string) => void
   clearBrowserPageAnnotations: (pageId: string) => void
+  removeDeliveredBrowserPageAnnotations: (
+    pageId: string,
+    deliveredAnnotations: readonly BrowserPageAnnotation[]
+  ) => void
   hydrateBrowserSession: (
     session: WorkspaceSessionState,
     options?: WorkspaceSessionHydrationOptions
@@ -215,8 +218,7 @@ export type BrowserSlice = {
   fetchBrowserSessionProfiles: () => Promise<void>
   createBrowserSessionProfile: (
     scope: 'isolated' | 'imported',
-    label: string,
-    options?: BrowserSessionProfileCreateOptions
+    label: string
   ) => Promise<BrowserSessionProfile | null>
   deleteBrowserSessionProfile: (profileId: string) => Promise<boolean>
   importCookiesToProfile: (profileId: string) => Promise<BrowserCookieImportExecutionResult>
@@ -239,7 +241,7 @@ export type BrowserSlice = {
   ) => Promise<BrowserCookieImportExecutionResult>
   clearDefaultSessionCookies: () => Promise<boolean>
   browserUrlHistory: BrowserHistoryEntry[]
-  addBrowserHistoryEntry: (url: string, title: string) => void
+  addBrowserHistoryEntry: (url: string, title: string, faviconUrl?: string | null) => void
   workspaceDocHistory: WorkspaceDocHistoryEntry[]
   /** A visit bumps recency and count; a title-only refresh (bump: false) renames the row. */
   recordWorkspaceDocVisit: (

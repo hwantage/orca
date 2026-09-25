@@ -1,24 +1,20 @@
 import type { AgentStatusSlice } from './agent-status-slice-contract'
 import type { AgentStatusRuntime } from './agent-status-runtime'
 import type { AgentLaunchConfigRegistryEntry } from './agent-status-contract'
-import { copyLaunchConfig, sleepingRecordFromEntry } from './agent-status-recovery-helpers'
+import { copyLaunchConfig, sleepingRecordFromEntry } from './agent-status-sleeping-records'
 import {
   getLaunchConfigForEntry,
   launchConfigRegistryEntriesEqual,
   normalizeLaunchConfigRegistrationMetadata,
   registryEntryMatchesStatus
 } from './agent-status-launch-config'
-import { getLaunchConfigForStatusMetadata } from './agent-status-map-helpers'
-import { findAgentPaneWorktreeId, getTabIdFromPaneKey } from './agent-status-pane-helpers'
+import { findAgentPaneWorktreeId, getTabIdFromPaneKey } from './agent-status-pane-key-tab-binding'
 
 export function createAgentStatusLaunchActions(
   runtime: AgentStatusRuntime
 ): Pick<
   AgentStatusSlice,
-  | 'registerAgentLaunchConfig'
-  | 'getAgentLaunchConfigForStatusEntry'
-  | 'getAgentLaunchConfigForStatusMetadata'
-  | 'clearAgentLaunchConfig'
+  'registerAgentLaunchConfig' | 'getAgentLaunchConfigForStatusEntry' | 'clearAgentLaunchConfig'
 > {
   const { get, set } = runtime
   return {
@@ -93,9 +89,6 @@ export function createAgentStatusLaunchActions(
       })
     },
     getAgentLaunchConfigForStatusEntry: (entry) => getLaunchConfigForEntry(get(), entry),
-    getAgentLaunchConfigForStatusMetadata: (metadata) =>
-      getLaunchConfigForStatusMetadata(get(), metadata),
-
     clearAgentLaunchConfig: (paneKey) => {
       set((s) => {
         if (!(paneKey in s.agentLaunchConfigByPaneKey)) {

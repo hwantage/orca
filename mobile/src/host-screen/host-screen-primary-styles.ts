@@ -36,10 +36,15 @@ export const hostScreenPrimaryStyles = StyleSheet.create({
   },
   hostIdentity: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
     minWidth: 0,
     marginRight: spacing.md
+  },
+  hostIdentityLine: { flexDirection: 'row', alignItems: 'center', minWidth: 0 },
+  hostPlatformText: {
+    marginLeft: 16,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16
   },
   hostNameText: {
     flex: 1,
@@ -153,8 +158,15 @@ export const hostScreenPrimaryStyles = StyleSheet.create({
   toolbarIconDisabled: {
     opacity: 0.6
   },
-  toolbarIconButton: {
+  searchToggle: {
     padding: spacing.xs
+  },
+  searchBar: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.borderSubtle,
+    backgroundColor: colors.bgPanel
   },
   centered: {
     flex: 1,

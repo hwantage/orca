@@ -116,6 +116,8 @@ export function DiffSectionItem({
     comments: inlineComments ?? (worktreeId ? diffComments : []),
     commentableLineNumbers: getCommentableLineNumbers?.(section),
     addButtonLabel: addLineCommentLabel,
+    pendingCommentTarget: popover,
+    addNoteShortcutEnabled: hasLineCommentAction,
     onAddCommentClick: ({ lineNumber, startLine, top }) =>
       setPopover({
         lineNumber,
@@ -376,6 +378,7 @@ export function DiffSectionItem({
           isEditable={isEditable}
           diffEditorFontSize={diffEditorFontSize}
           diffWordWrap={settings?.diffWordWrap}
+          diffShowWhitespace={settings?.diffShowWhitespace}
           editorFontFamily={resolveEditorFontFamily(settings)}
           onCancelComment={() => setPopover(null)}
           onSubmitComment={handleSubmitComment}

@@ -18,6 +18,7 @@ import {
   sshPtyOwnerLeaseSecretSlot
 } from '../../protected-secret-persistence'
 import {
+  isLegacyOpenCodeGoApiKey,
   isLegacyOpenCodeSessionCookie,
   isLegacySshPtyOwnerLease
 } from '../leasing-ssh-ptys/secret-validation'
@@ -51,8 +52,10 @@ function logPersistenceStartupMilestone(
   if (!isStartupDiagnosticsEnabled()) {
     return
   }
+  // Why: snapshot `t` before resolving lazy details — otherwise an expensive details closure is billed to the milestone it measures.
+  const t = Math.round(performance.now())
   const resolvedDetails = typeof details === 'function' ? details() : details
-  logStartupDiagnostic(event, { t: Math.round(performance.now()), ...resolvedDetails })
+  logStartupDiagnostic(event, { t, ...resolvedDetails })
 }
 
 import type { StoreRuntimeState } from './store-runtime-state'
@@ -103,6 +106,13 @@ export class LoadedStateParsingOperations {
             PROTECTED_SECRET_SLOT.opencodeSessionCookie,
             parsed.settings.opencodeSessionCookie,
             isLegacyOpenCodeSessionCookie
+          )
+        }
+        if (parsed.settings?.opencodeGoApiKey) {
+          parsed.settings.opencodeGoApiKey = this.runtime.protectedSecrets.decrypt(
+            PROTECTED_SECRET_SLOT.opencodeGoApiKey,
+            parsed.settings.opencodeGoApiKey,
+            isLegacyOpenCodeGoApiKey
           )
         }
         if (parsed.settings?.httpProxyUrl) {

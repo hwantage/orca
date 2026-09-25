@@ -20,6 +20,7 @@ import {
   _setWslCachesForTests,
   getCachedWslAvailability,
   getCachedWslDistros,
+  getWslHome,
   hasCachedWslAvailability,
   hasCachedWslDistros,
   isWslAvailable,
@@ -311,6 +312,28 @@ describe('WSL distro discovery cache', () => {
   })
 })
 
+describe('WSL home cache', () => {
+  afterEach(() => {
+    execFileMock.mockReset()
+    execFileSyncMock.mockReset()
+    _resetWslCachesForTests()
+  })
+
+  it('bounds cached homes while retaining the most recently used distros', () => {
+    execFileSyncMock.mockImplementation((_command, args) => `/home/${args[1]}\n`)
+
+    withPlatform('win32', () => {
+      for (let index = 0; index < 68; index += 1) {
+        expect(getWslHome(`Distro-${index}`)).toContain(`Distro-${index}`)
+      }
+      expect(getWslHome('Distro-4')).toContain('Distro-4')
+      expect(execFileSyncMock).toHaveBeenCalledTimes(68)
+      expect(getWslHome('Distro-0')).toContain('Distro-0')
+      expect(execFileSyncMock).toHaveBeenCalledTimes(69)
+    })
+  })
+})
+
 describe('WSL availability cache', () => {
   afterEach(() => {
     execFileMock.mockReset()
@@ -390,6 +413,40 @@ describe('WSL availability cache', () => {
       )
       expect(execFileSyncMock).not.toHaveBeenCalled()
     })
+  })
+
+  // Why this site matters more than the other wsl.exe spawns (#16463): ENOENT is
+  // deliberately non-retryable here, so a spawn that failed only because the
+  // inherited cwd had been deleted was cached as "WSL is not installed" on the
+  // 10-minute definitive TTL with exponential backoff. Git kept working and Orca
+  // reported WSL unavailable -- a worse state than the bug being fixed. Naming
+  // the directory is what keeps ENOENT meaning "wsl.exe is not on PATH".
+  it('names an explicit spawn directory on both probes, so no deleted cwd can read as ENOENT', async () => {
+    execFileSyncMock.mockReturnValueOnce('')
+    execFileMock.mockImplementation((_command, _args, _options, callback) => {
+      callback(null, '', '')
+    })
+
+    withPlatform('win32', () => {
+      expect(isWslAvailable()).toBe(true)
+    })
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      'wsl.exe',
+      ['--status'],
+      expect.objectContaining({ cwd: expect.any(String) })
+    )
+
+    // The two probes share one cache, so a false ENOENT from either poisons both.
+    _resetWslCachesForTests()
+    await withPlatformAsync('win32', async () => {
+      await expect(isWslAvailableAsync()).resolves.toBe(true)
+    })
+    expect(execFileMock).toHaveBeenCalledWith(
+      'wsl.exe',
+      ['--status'],
+      expect.objectContaining({ cwd: expect.any(String) }),
+      expect.any(Function)
+    )
   })
 
   it('shares one wsl.exe spawn between concurrent async probes', async () => {
@@ -513,10 +570,10 @@ describe('WSL availability cache', () => {
   it.each([
     ['wsl.exe reports WSL unusable', { status: 1 }],
     ['wsl.exe is not installed', { code: 'ENOENT' }]
-  ])('holds a definitive failure far longer than a timeout when %s', (_label, errorShape) => {
+  ])('holds a definitive failure far longer than a timeout when %s', (_label, errorFields) => {
     vi.useFakeTimers()
     execFileSyncMock.mockImplementationOnce(() => {
-      throw Object.assign(new Error('definitive failure'), errorShape)
+      throw Object.assign(new Error('definitive failure'), errorFields)
     })
     execFileSyncMock.mockReturnValueOnce('')
 
@@ -587,10 +644,10 @@ describe('WSL availability cache', () => {
   it.each([
     ['a definitive failure', { status: 1 }],
     ['a timeout', { code: 'ETIMEDOUT', status: null, signal: 'SIGTERM' }]
-  ])('re-probes availability once a distro list succeeds after %s', (_label, errorShape) => {
+  ])('re-probes availability once a distro list succeeds after %s', (_label, errorFields) => {
     vi.useFakeTimers()
     execFileSyncMock.mockImplementationOnce(() => {
-      throw Object.assign(new Error('probe failed'), errorShape)
+      throw Object.assign(new Error('probe failed'), errorFields)
     })
 
     try {
