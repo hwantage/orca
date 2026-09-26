@@ -387,6 +387,63 @@ describe('useBrowserPageChromeFocus', () => {
     expect(peekBrowserFocusRequest(PAGE_ID)).toBeNull()
   })
 
+  it('rejects event-delivered guest focus in an inactive split', () => {
+    const view = render(<ChromeHarness />)
+    view.rerender(<ChromeHarness chromeShortcutScope="inactive" />)
+    const outside = render(<input data-testid="outside" />).getByTestId('outside')
+    act(() => outside.focus())
+
+    act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+
+    expect(document.activeElement).toBe(outside)
+    expect(peekBrowserFocusRequest(PAGE_ID)).toBeNull()
+  })
+
+  it('retains event-delivered guest focus until a reattaching guest is ready', () => {
+    const view = render(<ChromeHarness hasGuest={false} />)
+    act(() => addressBar().focus())
+
+    act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+    act(() => flushFrames())
+
+    expect(document.activeElement).toBe(addressBar())
+    expect(peekBrowserFocusRequest(PAGE_ID)).toBe('webview')
+    view.rerender(<ChromeHarness />)
+    act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+
+    expect(document.activeElement).toBe(guest())
+    expect(peekBrowserFocusRequest(PAGE_ID)).toBeNull()
+  })
+
+  it.each(['pointer', 'address-bar', 'split', 'tab'])(
+    'cancels event-delivered guest focus after %s input',
+    (input) => {
+      const view = render(<ChromeHarness hasGuest={false} />)
+      act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+      expect(peekBrowserFocusRequest(PAGE_ID)).toBe('webview')
+
+      if (input === 'pointer') {
+        act(() => window.dispatchEvent(new Event('pointerdown')))
+      } else if (input === 'address-bar') {
+        act(() => focusAddressBarFromIpc.emit({ browserPageId: PAGE_ID }))
+      } else {
+        view.rerender(
+          <ChromeHarness
+            hasGuest={false}
+            isActive={input !== 'tab'}
+            chromeShortcutScope="inactive"
+          />
+        )
+      }
+
+      expect(peekBrowserFocusRequest(PAGE_ID)).toBeNull()
+      act(() => addressBar().focus())
+      view.rerender(<ChromeHarness />)
+      act(() => flushFrames())
+      expect(document.activeElement).toBe(addressBar())
+    }
+  )
+
   it('preserves a guest request through StrictMode effect replay', () => {
     act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
     render(
