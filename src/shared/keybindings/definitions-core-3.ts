@@ -35,6 +35,19 @@ export const KEYBINDING_DEFINITION_CORE_3: readonly KeybindingDefinition[] = [
     defaultBindings: platformBindings(['Mod+C'])
   },
   {
+    id: 'browser.annotateElement',
+    title: 'Annotate Page Element',
+    group: 'Browser',
+    scope: 'browser',
+    searchKeywords: ['shortcut', 'browser', 'annotate', 'comment', 'element'],
+    // Why: Ctrl+Shift+C is terminal copy on Linux/Windows, including web terminals in the page.
+    defaultBindings: {
+      darwin: ['Mod+Shift+C'],
+      linux: ['Alt+Shift+N'],
+      win32: ['Alt+Shift+N']
+    }
+  },
+  {
     id: 'editor.commandPalette',
     title: 'Command Palette',
     group: 'Editors',
@@ -289,13 +302,5 @@ export const KEYBINDING_DEFINITION_CORE_3: readonly KeybindingDefinition[] = [
     scope: 'terminal',
     searchKeywords: ['shortcut', 'pane', 'expand', 'collapse'],
     defaultBindings: platformBindings(['Mod+Shift+Enter'])
-  },
-  {
-    id: 'terminal.setTitle',
-    title: 'Set Title…',
-    group: 'Terminal Panes',
-    scope: 'terminal',
-    searchKeywords: ['shortcut', 'terminal', 'pane', 'set title', 'title', 'rename'],
-    defaultBindings: platformBindings([])
   }
 ]

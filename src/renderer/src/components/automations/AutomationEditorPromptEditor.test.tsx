@@ -72,7 +72,7 @@ describe('AutomationEditorPromptEditor', () => {
   it('installs editor shortcuts and syncs an external rewrite after mount', () => {
     const editorInstance = {
       getContainerDomNode: () => document.createElement('div'),
-      onDidDispose: vi.fn()
+      onDidDispose: vi.fn<(listener: () => void) => void>()
     }
     const { rerender } = render(
       <AutomationEditorPromptEditor
@@ -101,8 +101,8 @@ describe('AutomationEditorPromptEditor', () => {
 
     expect(syncContentUpdate).toHaveBeenCalledWith(editorInstance, 'from template')
 
-    const disposeEditor = editorInstance.onDidDispose.mock.calls[0]?.[0] as () => void
-    disposeEditor()
+    const disposeEditor = editorInstance.onDidDispose.mock.calls[0]?.[0]
+    disposeEditor?.()
     expect(cleanupCommandPaletteShortcut).toHaveBeenCalledTimes(1)
   })
 
