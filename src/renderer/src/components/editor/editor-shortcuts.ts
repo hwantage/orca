@@ -1,7 +1,11 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import { useAppStore } from '@/store'
-import { keybindingMatchesAction, type KeybindingActionId } from '../../../../shared/keybindings'
+import {
+  hasCustomEditorF1Binding,
+  keybindingMatchesAction,
+  type KeybindingActionId
+} from '../../../../shared/keybindings'
 
 export function editorShortcutMatches(
   actionId: KeybindingActionId,
@@ -145,11 +149,9 @@ export function installEditorCommandPaletteShortcut(
   const handleKeyDown = (event: KeyboardEvent): void => {
     const matchesShortcut = editorShortcutMatches('editor.commandPalette', event)
     // Why: consume Monaco's F1 after the Orca binding is remapped or disabled.
-    const matchesDefaultShortcut = keybindingMatchesAction(
-      'editor.commandPalette',
-      event,
-      getShortcutPlatform()
-    )
+    const matchesDefaultShortcut =
+      keybindingMatchesAction('editor.commandPalette', event, getShortcutPlatform()) &&
+      !hasCustomEditorF1Binding(useAppStore.getState().keybindings)
     if (!matchesShortcut && !matchesDefaultShortcut) {
       return
     }
