@@ -481,36 +481,22 @@ describe('installEditorCommandPaletteShortcut', () => {
   })
 
   it.each(['darwin', 'linux', 'win32'] as const)(
-    'leaves F1 to an existing editor shortcut on %s and restores the palette after reset',
+    'blocks F1 without a diff handler on %s and restores the palette after reset',
     (platform) => {
       shortcutState.platform = platform
       shortcutState.keybindings = { 'editor.nextChange': ['F1'] }
       const fixture = createCommandPaletteFixture()
 
-      const unhandled = dispatchKeyDown(fixture.input, { key: 'F1', code: 'F1' })
+      const blocked = dispatchKeyDown(fixture.input, { key: 'F1', code: 'F1' })
 
-      expect(unhandled.defaultPrevented).toBe(false)
-      expect(fixture.onDownstreamKeyDown).toHaveBeenCalledTimes(1)
-      expect(fixture.onCommandPalette).not.toHaveBeenCalled()
-
-      const goToDiff = vi.fn()
-      const disposeNavigation = installMonacoDiffChangeNavigationShortcut({
-        getContainerDomNode: () => fixture.container,
-        goToDiff
-      })
-      const navigation = dispatchKeyDown(fixture.input, { key: 'F1', code: 'F1' })
-      dispatchKeyDown(fixture.input, { key: 'F1', code: 'F1', repeat: true })
-
-      expect(navigation.defaultPrevented).toBe(true)
-      expect(goToDiff).toHaveBeenCalledExactlyOnceWith('next')
+      expect(blocked.defaultPrevented).toBe(true)
+      expect(fixture.onDownstreamKeyDown).not.toHaveBeenCalled()
       expect(fixture.onCommandPalette).not.toHaveBeenCalled()
 
       shortcutState.keybindings = {}
       dispatchKeyDown(fixture.input, { key: 'F1', code: 'F1' })
 
       expect(fixture.onCommandPalette).toHaveBeenCalledTimes(1)
-      expect(goToDiff).toHaveBeenCalledTimes(1)
-      disposeNavigation()
       fixture.dispose()
     }
   )
@@ -518,7 +504,7 @@ describe('installEditorCommandPaletteShortcut', () => {
   it.each([
     { label: 'remapped', bindings: ['Mod+Shift+P'] },
     { label: 'disabled', bindings: [] }
-  ])('does not swallow another editor action’s F1 when the palette is $label', ({ bindings }) => {
+  ])('blocks an unavailable diff action’s F1 when the palette is $label', ({ bindings }) => {
     shortcutState.keybindings = {
       'editor.commandPalette': bindings,
       'editor.nextChange': ['F1']
@@ -527,9 +513,9 @@ describe('installEditorCommandPaletteShortcut', () => {
 
     const event = dispatchKeyDown(fixture.input, { key: 'F1', code: 'F1' })
 
-    expect(event.defaultPrevented).toBe(false)
+    expect(event.defaultPrevented).toBe(true)
     expect(fixture.onCommandPalette).not.toHaveBeenCalled()
-    expect(fixture.onDownstreamKeyDown).toHaveBeenCalledTimes(1)
+    expect(fixture.onDownstreamKeyDown).not.toHaveBeenCalled()
     fixture.dispose()
   })
 

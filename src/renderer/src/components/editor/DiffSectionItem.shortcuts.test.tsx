@@ -176,20 +176,26 @@ afterEach(() => {
 })
 
 describe.each(['staged', 'unstaged'] as const)('DiffSectionItem shortcuts (%s)', (area) => {
-  it.each([
-    { action: 'editor.nextChange', direction: 'next' },
-    { action: 'editor.previousChange', direction: 'previous' }
-  ] as const)('routes custom F1 to $action in both panes', ({ action, direction }) => {
-    shortcutState.keybindings = { [action]: ['F1'] }
-    const fixture = mountSection(area)
+  describe.each([
+    { palette: 'default', overrides: {} },
+    { palette: 'disabled', overrides: { 'editor.commandPalette': [] } },
+    { palette: 'remapped', overrides: { 'editor.commandPalette': ['Mod+Shift+P'] } }
+  ])('with the palette $palette', ({ overrides }) => {
+    it.each([
+      { action: 'editor.nextChange', direction: 'next' },
+      { action: 'editor.previousChange', direction: 'previous' }
+    ] as const)('routes custom F1 to $action in both panes', ({ action, direction }) => {
+      shortcutState.keybindings = { ...overrides, [action]: ['F1'] }
+      const fixture = mountSection(area)
 
-    for (const pane of [fixture.original, fixture.modified]) {
-      expect(pressF1(pane.input).defaultPrevented).toBe(true)
-      expect(pressF1(pane.input, true).defaultPrevented).toBe(true)
-      expect(pane.runAction).not.toHaveBeenCalled()
-      expect(pane.onDownstreamKeyDown).not.toHaveBeenCalled()
-    }
-    expect(fixture.editor.goToDiff.mock.calls).toEqual([[direction], [direction]])
+      for (const pane of [fixture.original, fixture.modified]) {
+        expect(pressF1(pane.input).defaultPrevented).toBe(true)
+        expect(pressF1(pane.input, true).defaultPrevented).toBe(true)
+        expect(pane.runAction).not.toHaveBeenCalled()
+        expect(pane.onDownstreamKeyDown).not.toHaveBeenCalled()
+      }
+      expect(fixture.editor.goToDiff.mock.calls).toEqual([[direction], [direction]])
+    })
   })
 
   it('keeps the default F1 command palette in both panes', () => {
