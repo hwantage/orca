@@ -1,3 +1,4 @@
+import type { TmuxManagedPty } from '../shared/tmux-agent-hook-owner'
 /* oxlint-disable max-lines */
 import { resolveSynchronizedOutputSafeSplit } from '../shared/terminal-synchronized-output-scan'
 import { createTerminalTitleTracker } from '../shared/terminal-output-side-effects'
@@ -128,7 +129,10 @@ import {
   injectRelayHistoryEnv
 } from './terminal-history'
 import { isFlattenedNodePtyLoaderMessage } from '../main/orcad/node-pty-loader-diagnosis'
-import { collectNodePtyUnavailableDiagnosis } from './node-pty-binding-survey'
+import {
+  collectNodePtyUnavailableDiagnosis,
+  resolveNodePtyInstallDir
+} from './node-pty-binding-survey'
 import { describeRelayRuntime } from './relay-runtime-identity'
 import { relayConptyDllSpawnOptions } from './relay-windows-conpty'
 import {
@@ -670,9 +674,10 @@ export class PtyHandler {
    * healthy relay never pays for them.
    */
   private async nodePtyUnavailableError(spawnError?: unknown): Promise<Error> {
-    const nodePtyDir = this.relayNodePtyDir()
+    // Why: diagnose the install the bare import loaded; the bundle's own dir is only the fallback.
+    const nodePtyDir = resolveNodePtyInstallDir(__dirname) ?? this.relayNodePtyDir()
     const diagnosis = await collectNodePtyUnavailableDiagnosis({
-      nodePtyDir: existsSync(nodePtyDir) ? nodePtyDir : null,
+      nodePtyDir,
       error: spawnError ?? this.lastPtyLoadError
     })
     return Object.assign(new Error(formatNodePtyUnavailableMessage(diagnosis)), {
@@ -745,6 +750,29 @@ export class PtyHandler {
    *  paneKey since. Nothing this pane emits can belong to a surface any client still owns. */
   isPaneSurfaceRetired(paneKey: string): boolean {
     return this.retiredPaneSurfaces.isRetired(paneKey)
+  }
+
+  getTmuxManagedPty(paneKey: string): TmuxManagedPty | null {
+    if (process.platform === 'win32' || this.isPaneSurfaceRetired(paneKey)) {
+      return null
+    }
+    const candidates = [...this.ptys.values()].filter(
+      (pty) => !pty.disposed && (pty.paneKey ?? pty.attachIdentity?.paneKey) === paneKey
+    )
+    const root = candidates.length === 1 ? candidates[0] : undefined
+    if (!root?.worktreeId || !root.pty.pid) {
+      return null
+    }
+    return {
+      pid: root.pty.pid,
+      incarnation: root.incarnationId,
+      scope: {
+        executionHostId: 'local',
+        wslDistro: null,
+        workspaceId: root.worktreeId,
+        workspaceKind: root.worktreeId.startsWith('folder:') ? 'folder' : 'git-worktree'
+      }
+    }
   }
 
   /** Notified when the last PTY leaves the pool, so the relay can re-arm its idle grace. */
