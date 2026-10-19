@@ -8,7 +8,6 @@ import {
   pickParsedAgentStatusPayload,
   AGENT_STATUS_JSON_STRUCTURE_LIMITS,
   AGENT_STATUS_MAX_FIELD_LENGTH,
-  AGENT_STATUS_MAX_SUBAGENTS,
   AGENT_STATUS_TOOL_NAME_MAX_LENGTH,
   AGENT_STATUS_TOOL_INPUT_MAX_LENGTH,
   AGENT_STATUS_ASSISTANT_MESSAGE_MAX_LENGTH,
@@ -239,11 +238,12 @@ Fix dispatch fallback preview for normalized status prompts`
   })
 
   it('accepts custom non-empty agentType values', () => {
-    const result = parseAgentStatusPayload('{"state":"working","agentType":"cursor"}')
+    const agentType: AgentType = 'some-in-house-agent'
+    const result = parseAgentStatusPayload(JSON.stringify({ state: 'working', agentType }))
     expect(result).toEqual({
       state: 'working',
       prompt: '',
-      agentType: 'cursor'
+      agentType
     })
   })
 
@@ -306,7 +306,6 @@ Fix dispatch fallback preview for normalized status prompts`
       JSON.stringify({ state: 'waiting', interactivePrompt: long })
     )
     expect(result!.interactivePrompt).toHaveLength(AGENT_STATUS_INTERACTIVE_PROMPT_MAX_LENGTH)
-    expect(AGENT_STATUS_INTERACTIVE_PROMPT_MAX_LENGTH).toBe(16000)
   })
 
   it('leaves interactivePrompt undefined when absent or non-string', () => {
@@ -572,7 +571,7 @@ Fix dispatch fallback preview for normalized status prompts`
     }
   })
 
-  it('normalizes the subagents field, dropping invalid entries and bounding count', () => {
+  it('normalizes the subagents field, dropping invalid entries and keeping every valid one', () => {
     const result = parseAgentStatusPayload(
       JSON.stringify({
         state: 'working',
@@ -583,7 +582,7 @@ Fix dispatch fallback preview for normalized status prompts`
           { id: '', state: 'working', startedAt: 1 },
           { id: 'bad-state', state: 'running', startedAt: 1 },
           'garbage',
-          ...Array.from({ length: AGENT_STATUS_MAX_SUBAGENTS + 5 }, (_, i) => ({
+          ...Array.from({ length: 37 }, (_, i) => ({
             id: `extra-${i}`,
             state: 'idle',
             startedAt: i
@@ -591,7 +590,7 @@ Fix dispatch fallback preview for normalized status prompts`
         ]
       })
     )
-    expect(result?.subagents?.length).toBe(AGENT_STATUS_MAX_SUBAGENTS)
+    expect(result?.subagents?.length).toBe(40)
     expect(result?.subagents?.[0]).toEqual({
       id: 'a1',
       state: 'working',
@@ -732,11 +731,6 @@ describe('WellKnownAgentType', () => {
       'rovo'
     ])
   })
-
-  it('keeps AgentType open to custom agent names', () => {
-    const custom: AgentType = 'some-in-house-agent'
-    expect(custom).toBe('some-in-house-agent')
-  })
 })
 
 describe('the main agent field on a status payload', () => {
@@ -757,6 +751,22 @@ describe('the main agent field on a status payload', () => {
         '{"state":"done","mainAgent":{"state":"done","outcome":"maybe","stateStartedAt":5}}'
       )?.mainAgent
     ).toEqual({ state: 'done', stateStartedAt: 5 })
+  })
+
+  it('admits the host-observed verdicts, and reads an arm it cannot name as no verdict', () => {
+    for (const outcome of ['interruption', 'unconfirmed'] as const) {
+      expect(
+        parseAgentStatusPayload(
+          `{"state":"done","mainAgent":{"state":"done","outcome":"${outcome}","stateStartedAt":5}}`
+        )?.mainAgent
+      ).toEqual({ state: 'done', outcome, stateStartedAt: 5 })
+    }
+    // A newer host's arm drops the verdict, never the row: the row reads today's done.
+    expect(
+      parseAgentStatusPayload(
+        '{"state":"done","prompt":"keep me","mainAgent":{"state":"done","outcome":"from-a-newer-host","stateStartedAt":5}}'
+      )
+    ).toMatchObject({ state: 'done', prompt: 'keep me', mainAgent: { state: 'done' } })
   })
 
   it('drops a malformed main agent but never the row it rides on', () => {

@@ -66,6 +66,8 @@ function mockAgent({
 }
 
 let mockAgents: unknown[] = [mockAgent()]
+// The hook records behind mockAgents; the unread (bold) rule reads them.
+let mockAgentStatusByPaneKey: Record<string, { stateStartedAt: number }> = {}
 let mockFocusedAgentPaneKey: string | null = null
 let mockAgentActivityDisplayMode: 'compact' | 'full' | undefined
 let mockPromptCacheTimerEnabled = true
@@ -86,12 +88,13 @@ vi.mock('@/store', () => ({
     selector({
       agentActivityDisplayMode: mockAgentActivityDisplayMode,
       acknowledgedAgentsByPaneKey: {},
+      retainedAgentsByPaneKey: {},
       cacheTimerByKey: mockCacheTimerByKey,
       dropAgentStatus: vi.fn(),
       dismissRetainedAgent: vi.fn(),
       acknowledgeAgents: vi.fn(),
       agentSendPopoverTargetMode: null,
-      agentStatusByPaneKey: {},
+      agentStatusByPaneKey: mockAgentStatusByPaneKey,
       tabsByWorktree: {},
       terminalLayoutsByTabId: {},
       sendPromptToSidebarAgentTarget: vi.fn(),
@@ -132,7 +135,6 @@ vi.mock('@/components/dashboard/DashboardAgentRow', () => ({
     childAgentCount,
     childAgentsExpanded,
     onToggleChildAgents,
-    disclosureInGutter,
     onActivate
   }: {
     agent: { paneKey: string }
@@ -143,7 +145,6 @@ vi.mock('@/components/dashboard/DashboardAgentRow', () => ({
     childAgentCount?: number
     childAgentsExpanded?: boolean
     onToggleChildAgents?: () => void
-    disclosureInGutter?: boolean
     onActivate: (tabId: string, paneKey: string) => void
   }) => {
     capturedRowActivations.push({ paneKey: agent.paneKey, onActivate })
@@ -155,7 +156,6 @@ vi.mock('@/components/dashboard/DashboardAgentRow', () => ({
         data-disabled-reason={sendTargetDisabledReason}
         data-has-send-handler={typeof onSendTargetClick === 'function' ? 'true' : 'false'}
         data-pane-key={agent.paneKey}
-        data-disclosure-in-gutter={disclosureInGutter ? 'true' : 'false'}
       >
         {agent.paneKey}
         {typeof childAgentCount === 'number' && childAgentCount > 0 ? (
@@ -189,6 +189,7 @@ describe('WorktreeCardAgents', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockAgents = [mockAgent()]
+    mockAgentStatusByPaneKey = {}
     mockFocusedAgentPaneKey = null
     mockAgentActivityDisplayMode = undefined
     mockPromptCacheTimerEnabled = true
@@ -224,6 +225,7 @@ describe('WorktreeCardAgents', () => {
 
   it('emphasizes unvisited non-focused compact agent row text', async () => {
     mockAgentActivityDisplayMode = 'compact'
+    mockAgentStatusByPaneKey = { 'tab-1:1': { stateStartedAt: 1000 } }
     mockAgents = [
       mockAgent({
         agentType: 'codex',
@@ -244,6 +246,7 @@ describe('WorktreeCardAgents', () => {
 
   it('keeps focused compact agent row text legible', async () => {
     mockAgentActivityDisplayMode = 'compact'
+    mockAgentStatusByPaneKey = { 'tab-1:1': { stateStartedAt: 1000 } }
     mockFocusedAgentPaneKey = 'tab-1:1'
     mockAgents = [
       mockAgent({
@@ -438,8 +441,6 @@ describe('WorktreeCardAgents', () => {
     expect(markup).toContain('role="tree"')
     expect(markup).toContain('data-pane-key="tab-parent:1"')
     expect(markup).toContain('data-pane-key="tab-child:1"')
-    expect(markup).toContain('data-pane-key="tab-parent:1" data-disclosure-in-gutter="true"')
-    expect(markup).toContain('data-pane-key="tab-child:1" data-disclosure-in-gutter="false"')
     expect(markup).toContain('aria-label="Hide 1 child agent"')
     expect(markup).toContain('aria-expanded="true"')
   })
