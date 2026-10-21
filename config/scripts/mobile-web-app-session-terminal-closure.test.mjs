@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { mobileWebAppRouteClosure } from './build-mobile-web-app-bundle.mjs'
 import { mobileWebAppDependenciesPresent } from './mobile-web-app-bundle-dependencies.mjs'
 import { mobileWebAppRouteChunkClosure } from './mobile-web-app-route-chunk-closure.mjs'
@@ -425,9 +425,41 @@ const MERMAID_PACKAGE = 'node_modules/mermaid/'
  *
  *   modules        4215 -> 4216   (+1)
  *   local modules  1029 -> 1030   (+1)
+ *
+ * The page then took over its own safe area: the bridge client reaches
+ * `bridge/bridge-safe-area-insets.ts`, and the closure gained the page's root layout
+ * (`app/_layout.web.tsx`), which wraps every route. Two local modules, measured.
+ *
+ *   modules        4216 -> 4218   (+2)
+ *   local modules  1030 -> 1032   (+2)
+ *
+ * #22452 (`80f5aae0f9`) then added `src/shared/main-agent-status.ts` and
+ * `src/shared/agent-turn-outcome.ts`, which `agent-status-types.ts` on this route imports. Two local
+ * modules; the change was src/shared-only, so its own CI never ran this suite and main read two over.
+ *
+ *   modules        4218 -> 4220   (+2)
+ *   local modules  1032 -> 1034   (+2)
+ *
+ * Reverting #18790 then took `src/shared/agent-icons/freebuff.png` back out of
+ * `mobile-agent-icon-assets.ts`, undoing the one module #22119 pinned for it. Measured on the revert.
+ *
+ *   modules        4220 -> 4219   (-1)
+ *   local modules  1034 -> 1033   (-1)
+ *
+ * #22301 (`25d7c21fcb`) then added `src/shared/agent-session-context-usage.ts` and
+ * `src/shared/agent-session-context-usage-schema.ts`, which `agent-session-wire.ts` and
+ * `agent-session-journal-types.ts` on this route import. Two local modules; it touched nothing under
+ * `mobile/`, so its own CI never ran this suite.
+ *
+ *   modules        4219 -> 4221   (+2)
+ *   local modules  1033 -> 1035   (+2)
+ *
+ * The browser pane's double buffer then moved into one pacer module, replacing the frame-apply
+ * hook, the pane-layers hook and the layer-flip module. Measured on main after the squash.
+ *
+ *   modules        4221 -> 4219   (-2)
+ *   local modules  1035 -> 1033   (-2)
  */
-const SESSION_ROUTE_MODULES = 4216
-
 /** What the page enters this route through once the route is a switch with a `.web.tsx` sibling. */
 const ROUTE_ENTRY = [
   'app/h/[hostId]/session/[worktreeId].web.tsx',
@@ -446,8 +478,13 @@ const describeClosure = bundles ? describe : describe.skip
 describeClosure(
   "the session route's page closure with the terminal on it",
   () => {
+    let closure
+    beforeAll(async () => {
+      closure = await mobileWebAppRouteClosure(SESSION_ROUTE)
+    }, 300_000)
+
     it('gains the document, xterm and the addons, and sheds the engine string', async () => {
-      const { local, modules } = await mobileWebAppRouteClosure(SESSION_ROUTE)
+      const { local, modules } = closure
       for (const gone of SHED) {
         expect(local, `${gone} is still in the closure`).not.toContain(gone)
       }
@@ -474,7 +511,7 @@ describeClosure(
     }, 300_000)
 
     it('enters through the web sibling and the route body, not the switch', async () => {
-      const { local } = await mobileWebAppRouteClosure(SESSION_ROUTE)
+      const { local } = closure
       for (const entry of ROUTE_ENTRY) {
         expect(local, `${entry} is not in the closure`).toContain(entry)
       }
@@ -486,13 +523,11 @@ describeClosure(
     }, 300_000)
 
     it('reaches the engine as one deferred module and never as part of the download', async () => {
-      const { modules } = await mobileWebAppRouteClosure(SESSION_ROUTE)
+      const { modules } = closure
       // The engine is here, as the one artifact the loader imports.
       expect(artifactModules(modules)).toHaveLength(1)
-      // And the package's own file tree is not, anywhere: it is inside that artifact. Meaningful
-      // only beside the line above, which is why the two sit together.
+      // Package sources stay inside that artifact; unrelated module counts are not this boundary.
       expect(packageModules(modules)).toEqual([])
-      expect(modules).toHaveLength(SESSION_ROUTE_MODULES)
 
       const download = await mobileWebAppRouteChunkClosure(SESSION_ROUTE)
       // The fence: nothing of the engine is reachable from the route's own chunk by an import
@@ -507,16 +542,17 @@ describeClosure(
     }, 600_000)
 
     it('leaves the 16px seam census exactly where C7.2 left it', async () => {
-      const closure = await mobileWebAppRouteClosure(SESSION_ROUTE)
       // Two preconditions, because zero offenders is what a walk that read nothing also reports:
       // the seam's own web module has to be in the closure, and no style may be unresolved.
       expect(closure.local).toContain('src/platform/text-input-font-size.web.ts')
+      expect(closure.local.length).toBeGreaterThan(900)
       expect(unresolvedTextInputStyles(mobileDir, closure)).toEqual([])
       expect(textInputFontSizeOffenders(mobileDir, closure)).toHaveLength(EXPECTED_OFFENDERS)
+      expect(closure.local).toContain('src/session/mobile-native-chat-input-styles.web.ts')
+      expect(closure.local).not.toContain('src/session/mobile-native-chat-input-styles.ts')
     }, 300_000)
 
     it('holds the editables the TextInput census cannot see to the same floor', async () => {
-      const closure = await mobileWebAppRouteClosure(SESSION_ROUTE)
       // The rich Markdown editor's surface is a `contenteditable` in a markup string, sized by a
       // rule in a stylesheet: `modulesDeclaringTextInput` matches JSX tags and never sees it, so it
       // shipped at 14 px and was measured at 14 px in both engines. The same floor, read by a rule

@@ -7,7 +7,9 @@ import {
   ACK_WORKTREE,
   createAcknowledgedTabRetirementFixture
 } from './acknowledged-terminal-tab-retirement-fixture'
-import { advanceTerminalTopologyRevision } from './workspace-session-terminal-membership-authority'
+import { advanceTerminalTopologyRevision } from '../persistence/terminal-topology/terminal-topology-membership'
+import { delegatedMobileSessionTabClose } from './mobile-session-tab-close-outcome'
+import { hostWorktreeTarget } from '../../shared/worktree/host-qualified-identity'
 
 const fixtures: ReturnType<typeof createAcknowledgedTabRetirementFixture>[] = []
 afterEach(async () => {
@@ -78,7 +80,7 @@ it.each([false, true])(
     }
     const pending = f.close()
     await f.entered.promise
-    f.runtime.onPtyExit('pty-a', 0, ACK_INCARNATION, { providerExitObserved: true })
+    await f.runtime.onPtyExit('pty-a', 0, ACK_INCARNATION, { providerExitObserved: true })
     expect(f.store.getWorkspaceSession().terminalLayoutsByTabId[ACK_TAB].ptyIdsByLeafId).toEqual({
       [ACK_SECOND_LEAF]: 'pty-b'
     })
@@ -103,7 +105,7 @@ it('protects a persisted incarnation replacement on the same leaf and raw PTY ID
   const f = fixture(true)
   const pending = f.close()
   await f.entered.promise
-  f.store.persistPtyBinding({
+  await f.store.persistPtyBinding({
     worktreeId: ACK_WORKTREE,
     tabId: ACK_TAB,
     leafId: ACK_LEAF,
@@ -133,13 +135,29 @@ it('rechecks current pins after renderer acknowledgement', async () => {
   f.acknowledgement.resolve()
   await expect(pending).rejects.toThrow('terminal_tab_pinned')
   expect(f.hasTab()).toBe(true)
+  await expect(f.store.flushPendingOrThrowAsync()).resolves.toBeUndefined()
+})
+
+it('keeps persistence writable when worktree teardown finds remaining terminal rows', async () => {
+  const f = fixture()
+  f.store.updateRepo({ id: 'repo1' }, { executionHostId: 'ssh:target' })
+  f.store.setWorktreeMeta(hostWorktreeTarget({ id: ACK_WORKTREE, hostId: 'ssh:target' }), {
+    hostId: 'ssh:target'
+  })
+  f.store.setWorkspaceSession(f.store.getWorkspaceSession(), 'ssh:target')
+  vi.spyOn(f.runtime, 'closeMobileSessionTab').mockResolvedValue(delegatedMobileSessionTabClose())
+  await expect(f.runtime.closeTerminalsForWorktree(`id:${ACK_WORKTREE}`)).rejects.toThrow(
+    'terminal_close_incomplete'
+  )
+  expect(f.hasTab()).toBe(true)
+  await expect(f.store.flushPendingOrThrowAsync()).resolves.toBeUndefined()
 })
 
 it('preserves dormant SSH kill IDs when the acknowledged tab becomes headless', async () => {
   const f = fixture()
   const visible = 'ssh:target@@visible'
   const dormant = 'ssh:target@@persisted-only'
-  f.store.persistPtyBinding({
+  await f.store.persistPtyBinding({
     worktreeId: ACK_WORKTREE,
     tabId: ACK_TAB,
     leafId: ACK_LEAF,

@@ -1,11 +1,17 @@
+import { readAgentProcessPresence } from '../../../shared/agent-process-presence'
 import { createHash } from 'node:crypto'
 
 import { normalizeAgentProviderSession } from '../../../shared/agent-session-resume'
 import {
+  isTurnEndDisposition,
   normalizeAgentStatusPayload,
+  type AgentMainAgentStatus,
   type ParsedAgentStatusPayload
 } from '../../../shared/agent-status-types'
 import { isAgentHookSource } from '../../../shared/agent-hook-relay'
+import type { HostTurnRecord } from '../../../shared/agent-hook-listener/listener-event'
+import { isTurnEndedAt } from '../../../shared/agent-hook-turn-end-timing'
+import { isRecord } from '../../../shared/agent-status-child-work-value-guards'
 import {
   normalizeClaudePromptId,
   normalizeGrokPromptId
@@ -29,6 +35,27 @@ export function dropHydratedIdleClaudeSubagents(
     ...payload,
     subagents: activeSubagents.length > 0 ? activeSubagents : undefined
   }
+}
+
+/** Rows written before `mainAgent` existed persisted `claudeLeadBoundaryChildOnly: true` instead: the
+ *  main agent had settled and child agents alone held the row `working`. That is `mainAgent.state === 'done'`
+ *  stored as a boolean, so it only fills an absent `mainAgent`; a row carrying both keeps `mainAgent`. The
+ *  flag stays readable until every user's file has been rewritten without it. */
+function legacyChildOnlyBoundaryMainAgent(
+  payload: ParsedAgentStatusPayload,
+  record: Record<string, unknown>,
+  stateStartedAt: number
+): AgentMainAgentStatus | undefined {
+  if (
+    payload.mainAgent !== undefined ||
+    record.claudeLeadBoundaryChildOnly !== true ||
+    payload.agentType !== 'claude'
+  ) {
+    return undefined
+  }
+  // Why: the gated working row stamps the main agent's end as `turnCompletedAt`; the row clock is the
+  // nearest fact an older row that lacks it can offer.
+  return { state: 'done', stateStartedAt: payload.turnCompletedAt ?? stateStartedAt }
 }
 
 export function sanitizeHydratedEntry(
@@ -84,10 +111,25 @@ export function sanitizeHydratedEntry(
   } else {
     return null
   }
-  const payload = normalizeAgentStatusPayload(record.payload)
-  if (!payload) {
+  const normalizedPayload = normalizeAgentStatusPayload(record.payload)
+  if (!normalizedPayload) {
     return null
   }
+  const legacyBoundaryMainAgent = legacyChildOnlyBoundaryMainAgent(
+    normalizedPayload,
+    record,
+    stateStartedAt
+  )
+  const payload = legacyBoundaryMainAgent
+    ? { ...normalizedPayload, mainAgent: legacyBoundaryMainAgent }
+    : normalizedPayload
+  const claudeRunningNonAgentTask =
+    typeof record.claudeRunningNonAgentTask === 'boolean'
+      ? record.claudeRunningNonAgentTask
+      : // Why: the legacy flag was only ever written while no shell ran beside the children.
+        legacyBoundaryMainAgent
+        ? false
+        : undefined
   const providerSession = normalizeAgentProviderSession(record.providerSession) ?? undefined
   const providerSessionOnly = record.providerSessionOnly === true
   const retainedForLiveness = record.retainedForLiveness === true
@@ -112,8 +154,12 @@ export function sanitizeHydratedEntry(
     source === 'claude' && (record.compactTrigger === 'manual' || record.compactTrigger === 'auto')
       ? record.compactTrigger
       : undefined
+  const turnStartedAt = record.turnStartedAt
+  const turnEndedAt = record.turnEndedAt
+  const hostTurn = readHostTurnRecord(record.hostTurn)
   return {
     paneKey,
+    agentPresence: readAgentProcessPresence(record.agentPresence),
     source,
     tabId: typeof tabId === 'string' ? tabId : undefined,
     worktreeId: typeof worktreeId === 'string' ? worktreeId : undefined,
@@ -127,14 +173,44 @@ export function sanitizeHydratedEntry(
     toolAgentId: typeof record.toolAgentId === 'string' ? record.toolAgentId : undefined,
     teammateName: typeof record.teammateName === 'string' ? record.teammateName : undefined,
     toolAgentType: typeof record.toolAgentType === 'string' ? record.toolAgentType : undefined,
-    claudeLeadBoundaryChildOnly: record.claudeLeadBoundaryChildOnly === true ? true : undefined,
+    ...(claudeRunningNonAgentTask !== undefined ? { claudeRunningNonAgentTask } : {}),
     providerSession,
     providerSessionOnly: providerSessionOnly ? true : undefined,
     retainedForLiveness: retainedForLiveness ? true : undefined,
     payload,
     receivedAt,
-    stateStartedAt
+    stateStartedAt,
+    ...(typeof turnStartedAt === 'number' && Number.isFinite(turnStartedAt) && turnStartedAt > 0
+      ? { turnStartedAt }
+      : {}),
+    ...(isTurnEndedAt(turnEndedAt) ? { turnEndedAt } : {}),
+    ...(isTurnEndDisposition(record.turnEndDisposition)
+      ? { turnEndDisposition: record.turnEndDisposition }
+      : {}),
+    ...(hostTurn ? { hostTurn } : {})
   }
+}
+
+function readHostTurnRecord(value: unknown): HostTurnRecord | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+  const { owner, currentTurnKey, completed } = value
+  if (typeof owner !== 'string' || typeof currentTurnKey !== 'string') {
+    return undefined
+  }
+  if (completed === undefined) {
+    return { owner, currentTurnKey }
+  }
+  return isRecord(completed) &&
+    typeof completed.turnKey === 'string' &&
+    isTurnEndedAt(completed.endedAt)
+    ? {
+        owner,
+        currentTurnKey,
+        completed: { turnKey: completed.turnKey, endedAt: completed.endedAt }
+      }
+    : undefined
 }
 
 export function readPersistedLaunchTokenHash(rawEntry: unknown): string | null {

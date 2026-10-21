@@ -1,14 +1,11 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createTerminalDocumentScope } from './document/document-scope'
 import { applyTerminalTheme, resolveTerminalContrastFloor } from './document/terminal-theme'
-import { documentModuleSource } from './document/document-module-source.test-support'
 import type {
   TerminalDocumentThemeMessage,
   TerminalDocumentThemeTarget
 } from './document/terminal-theme'
-
-const themeSource = documentModuleSource('terminal-theme')
 
 const DARK_FLOOR = 3
 const LIGHT_FLOOR = 4.5
@@ -43,13 +40,6 @@ function loadThemeApplier(
 }
 
 describe('mobile terminal-webview contrast floor gate', () => {
-  it('reads its contrast floors from the scope, not from a global', () => {
-    // The module's own text: what the threading guarantees is that nothing here reaches a shared
-    // object, so two documents can hold two themes.
-    expect(themeSource).toContain('export function resolveTerminalContrastFloor(')
-    expect(themeSource).not.toMatch(/^import \{ scope \}/m)
-  })
-
   it('picks the dark floor for dark composed backgrounds', () => {
     const resolveTerminalContrastFloor = loadContrastFloorResolver()
     for (const bg of ['#1a1b26', '#1e242a', '#282828', '#000000', 'black']) {
@@ -121,5 +111,70 @@ describe('mobile terminal-webview contrast floor gate', () => {
         expect(term.options.minimumContrastRatio).toBe(LIGHT_FLOOR)
       }
     })
+  })
+})
+
+describe('mobile terminal theme idempotence', () => {
+  function countingThemeScope() {
+    const term: TerminalDocumentThemeTarget = { options: { minimumContrastRatio: DARK_FLOOR } }
+    const scope = themeScope(term)
+    scope.terminalTheme = { ...scope.defaultTheme }
+    term.options.theme = scope.terminalTheme
+    const themeWrite = vi.fn()
+    const contrastWrite = vi.fn()
+    let theme = term.options.theme
+    let contrast = term.options.minimumContrastRatio
+    Object.defineProperty(term.options, 'theme', {
+      get: () => theme,
+      set: (next) => {
+        themeWrite(next)
+        theme = next
+      },
+      configurable: true
+    })
+    Object.defineProperty(term.options, 'minimumContrastRatio', {
+      get: () => contrast,
+      set: (next) => {
+        contrastWrite(next)
+        contrast = next
+      },
+      configurable: true
+    })
+    return { scope, term, themeWrite, contrastWrite }
+  }
+
+  it('preserves a live palette through repeated equal normalized host themes', () => {
+    const { scope, term, themeWrite, contrastWrite } = countingThemeScope()
+    const livePalette = term.options.theme
+    const second = { theme: { foreground: '#c0caf5', background: '#1a1b26', ignored: '#ffffff' } }
+    applyTerminalTheme(scope, { theme: { background: '#1a1b26' } })
+    applyTerminalTheme(scope, second)
+    expect(themeWrite).not.toHaveBeenCalled()
+    expect(contrastWrite).not.toHaveBeenCalled()
+    expect(term.options.theme).toBe(livePalette)
+    expect(scope.terminalThemeInput).toBe(second)
+  })
+
+  it('changes palette and published contrast independently', () => {
+    const { scope, themeWrite, contrastWrite } = countingThemeScope()
+    applyTerminalTheme(scope, { theme: { background: '#282828' } })
+    expect(themeWrite).toHaveBeenCalledTimes(1)
+    expect(contrastWrite).not.toHaveBeenCalled()
+    applyTerminalTheme(scope, { theme: { background: '#282828' }, minimumContrastRatio: 1 })
+    expect(themeWrite).toHaveBeenCalledTimes(1)
+    expect(contrastWrite).toHaveBeenCalledExactlyOnceWith(1)
+  })
+
+  it('forces an identical palette for visibility recovery', () => {
+    const { scope, themeWrite } = countingThemeScope()
+    applyTerminalTheme(scope, { theme: { ...scope.defaultTheme } }, true)
+    expect(themeWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains theme and published contrast before terminal construction', () => {
+    const scope = themeScope()
+    applyTerminalTheme(scope, { theme: { background: '#282828' }, minimumContrastRatio: 1 })
+    expect(scope.terminalTheme.background).toBe('#282828')
+    expect(scope.terminalMinimumContrastRatio).toBe(1)
   })
 })

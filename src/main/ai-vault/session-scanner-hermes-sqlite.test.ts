@@ -187,7 +187,8 @@ describe('Hermes 0.19 SQLite support & legacy backwards compatibility', () => {
     expect(finish).toHaveBeenCalledExactlyOnceWith({
       session: null,
       byteOffset: 0,
-      incomplete: true
+      incomplete: true,
+      cancelled: false
     })
   })
 

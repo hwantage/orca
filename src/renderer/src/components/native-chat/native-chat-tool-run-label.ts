@@ -1,11 +1,10 @@
 import { translate } from '@/i18n/i18n'
 import {
-  joinNativeChatToolRunClauses,
-  nativeChatToolRunClauses
+  nativeChatToolRunSentence as sharedRunSentence,
+  type NativeChatToolRunSentenceWords
 } from '../../../../shared/native-chat-tool-run-sentence'
 import type { NativeChatToolCategory } from '../../../../shared/native-chat-tool-icon'
-import { isToolCallBlock, type NativeChatBlock } from '../../../../shared/native-chat-types'
-import { toolInputCommand } from '../../../../shared/native-chat-tool-summary'
+import type { NativeChatBlock } from '../../../../shared/native-chat-types'
 
 /** One clause, localized.
  *
@@ -15,9 +14,12 @@ import { toolInputCommand } from '../../../../shared/native-chat-tool-summary'
  *  sentence would stay English in every locale while the row above it translated.
  *  `native-chat-shared-copy-matches-catalog` pins these against the record mobile
  *  renders from, which is what keeps the duplication honest. */
-function clause(category: NativeChatToolCategory, count: number): string {
+function clause(category: NativeChatToolCategory, count: number, live: boolean): string {
   const one = count === 1
   const value0 = { value0: count }
+  if (live) {
+    return liveClause(category, one, value0)
+  }
   switch (category) {
     case 'read':
       return one
@@ -86,34 +88,112 @@ function clause(category: NativeChatToolCategory, count: number): string {
   }
 }
 
-/** The one line a settled run reads as, localized. */
-export function nativeChatToolRunSentence(blocks: readonly NativeChatBlock[]): string | null {
-  const calls = blocks.filter(isToolCallBlock)
-  if (calls.length === 0) {
-    return null
+/** The present-tense clause, while the run is still live. Same shape as the
+ *  settled one so the header's text changes in place and nothing else does. */
+function liveClause(
+  category: NativeChatToolCategory,
+  one: boolean,
+  value0: { value0: number }
+): string {
+  switch (category) {
+    case 'read':
+      return one
+        ? translate('components.native-chat.tool.runLiveReadOne', 'Reading 1 file')
+        : translate(
+            'components.native-chat.tool.runLiveReadMany',
+            'Reading {{value0}} files',
+            value0
+          )
+    case 'search':
+      return one
+        ? translate('components.native-chat.tool.runLiveSearchOne', 'Searching 1 time')
+        : translate(
+            'components.native-chat.tool.runLiveSearchMany',
+            'Searching {{value0}} times',
+            value0
+          )
+    case 'listFiles':
+      return one
+        ? translate('components.native-chat.tool.runLiveListFilesOne', 'Listing 1 directory')
+        : translate(
+            'components.native-chat.tool.runLiveListFilesMany',
+            'Listing {{value0}} directories',
+            value0
+          )
+    case 'unknown':
+      return one
+        ? translate('components.native-chat.tool.runLiveCommandOne', 'Running 1 command')
+        : translate(
+            'components.native-chat.tool.runLiveCommandMany',
+            'Running {{value0}} commands',
+            value0
+          )
+    case 'fileChange':
+      return one
+        ? translate('components.native-chat.tool.runLiveFileChangeOne', 'Editing 1 file')
+        : translate(
+            'components.native-chat.tool.runLiveFileChangeMany',
+            'Editing {{value0}} files',
+            value0
+          )
+    case 'webSearch':
+      return one
+        ? translate('components.native-chat.tool.runLiveWebSearchOne', 'Searching the web 1 time')
+        : translate(
+            'components.native-chat.tool.runLiveWebSearchMany',
+            'Searching the web {{value0}} times',
+            value0
+          )
+    case 'mcpToolCall':
+      return one
+        ? translate('components.native-chat.tool.runLiveIntegrationOne', 'Using 1 integration')
+        : translate(
+            'components.native-chat.tool.runLiveIntegrationMany',
+            'Using {{value0}} integrations',
+            value0
+          )
+    case 'subAgentActivity':
+      return one
+        ? translate('components.native-chat.tool.runLiveAgentOne', 'Running 1 agent')
+        : translate(
+            'components.native-chat.tool.runLiveAgentMany',
+            'Running {{value0}} agents',
+            value0
+          )
+    case 'todoList':
+      return one
+        ? translate('components.native-chat.tool.runLivePlanOne', 'Updating the plan')
+        : translate(
+            'components.native-chat.tool.runLivePlanMany',
+            'Updating the plan {{value0}} times',
+            value0
+          )
+    case 'other':
+      return one
+        ? translate('components.native-chat.tool.runLiveToolOne', 'Using 1 tool')
+        : translate('components.native-chat.tool.runLiveToolMany', 'Using {{value0}} tools', value0)
   }
-  // A lone shell call keeps its own command: `git push` identifies the work
-  // better than "Ran 1 command" can, and it is the row the reader would open
-  // anyway. A call carrying no command has nothing better than its category.
-  if (calls.length === 1) {
-    const command = toolInputCommand(calls[0].input)
-    if (command !== null && command.length > 0) {
-      return command
-    }
-  }
-  return joinNativeChatToolRunClauses(
-    nativeChatToolRunClauses(calls).map(({ category, count }) => clause(category, count)),
-    {
-      pair: (first, second) =>
-        translate('components.native-chat.tool.runPair', '{{value0}} and {{value1}}', {
-          value0: first,
-          value1: second
-        }),
-      list: (leading, last) =>
-        translate('components.native-chat.tool.runList', '{{value0}}, and {{value1}}', {
-          value0: leading,
-          value1: last
-        })
-    }
-  )
+}
+
+const LOCALIZED_WORDS: NativeChatToolRunSentenceWords = {
+  clause,
+  pair: (first, second) =>
+    translate('components.native-chat.tool.runPair', '{{value0}} and {{value1}}', {
+      value0: first,
+      value1: second
+    }),
+  list: (leading, last) =>
+    translate('components.native-chat.tool.runList', '{{value0}}, and {{value1}}', {
+      value0: leading,
+      value1: last
+    })
+}
+
+/** The one line a run reads as, localized: past tense once settled, present
+ *  while live. */
+export function nativeChatToolRunSentence(
+  blocks: readonly NativeChatBlock[],
+  { live = false }: { live?: boolean } = {}
+): string | null {
+  return sharedRunSentence(blocks, { live }, LOCALIZED_WORDS)
 }

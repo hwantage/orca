@@ -33,6 +33,8 @@ export type TerminalInitialOscLink = {
  * every reader here is a truthiness test rather than a comparison.
  */
 export type TerminalDocumentCell = {
+  getChars?: () => string
+  getWidth?: () => number
   isBgDefault: () => boolean
   extended?: { urlId?: number }
   isInverse: () => number
@@ -102,6 +104,7 @@ export type TerminalDocumentTerminal = {
   onLineFeed?: (listener: () => void) => TerminalDocumentDisposable
   onScroll?: (listener: () => void) => TerminalDocumentDisposable
   onWriteParsed?: (listener: () => void) => TerminalDocumentDisposable
+  onRender?: (listener: () => void) => TerminalDocumentDisposable
   resize: (cols: number, rows: number) => void
   refresh: (start: number, end: number) => void
   dispose: () => void

@@ -5,11 +5,8 @@ import type {
   WorkerTerminalResourceRow,
   WorkerTerminalRetainedReason
 } from '../../../../orchestration/worker-terminal-ownership'
-import {
-  captureWorkerOutputArchive,
-  summarizeWorkerOutputArchive
-} from '../../../../orchestration/worker-output-archive'
-import type { OrcaRuntimeService } from '../../../../orca-runtime'
+import { summarizeWorkerOutputArchive } from '../../../../orchestration/worker-output-archive'
+import type { WorkerTerminalReleaseRuntime } from '../../../../orchestration/worker-terminal-release-runtime'
 import { describeUnconfirmedAgentStop } from '../../../../../../shared/pty-liveness-verdict'
 import { inspectWorkerTerminal } from './worker-observation'
 import { orchestrationTimestampToMs } from './worker-output'
@@ -18,12 +15,8 @@ import { classifyWorkerTerminalCloseError } from './worker-release-close-error'
 import { workerTerminalLeaseIsCurrent } from './worker-terminal-release-lease'
 import { resolveStructuredWorkerForDispatch } from '../../orchestration-structured-worker-lifecycle'
 import { stopStructuredWorkerForRelease } from './structured-worker-release-stop'
-import { isStructuredWorkerHandle } from '../../../../structured-worker-identity'
-
-export {
-  archiveSummary,
-  exposeWorkerTerminalResource
-} from './worker-terminal-resource-presentation'
+import { isStructuredWorkerHandle } from '../../../../../../shared/structured-worker-handle'
+import { captureWorkerReleaseArchive } from './worker-release-archive-capture'
 
 export type WorkerReleaseReceipt = {
   dispatchId: string
@@ -36,7 +29,7 @@ export type WorkerReleaseReceipt = {
 }
 
 type WorkerTerminalReleaseArgs = {
-  runtime: OrcaRuntimeService
+  runtime: WorkerTerminalReleaseRuntime
   db: OrchestrationDb
   dispatchId: string
   resource: WorkerTerminalResourceRow
@@ -49,7 +42,7 @@ type ActiveWorkerTerminalRelease = {
 }
 
 const activeReleaseByRuntime = new WeakMap<
-  OrcaRuntimeService,
+  WorkerTerminalReleaseRuntime,
   Map<string, ActiveWorkerTerminalRelease>
 >()
 
@@ -98,9 +91,8 @@ async function completeWorkerTerminalReleaseOnce(
     // here is what lets the release see the session instead of reporting it unreadable.
     //
     // NOT yet handled, and deliberately follow-up: rebinding a restarted runtime to a structured
-    // worker's hold and redrive subscription. Until that exists, a worker that survives a restart
-    // keeps no hold, so its child is evictable and its parked mail waits for the next arrival
-    // rather than a settle edge.
+    // worker's redrive subscription. Until that exists, a worker that survives a restart has its
+    // parked mail wait for the next arrival rather than a settle edge.
     await runtime.ensureStructuredAgentSessionHost().catch((error: unknown) => {
       console.warn(
         '[orchestration] structured host install failed before release',
@@ -209,13 +201,19 @@ async function completeWorkerTerminalReleaseOnce(
   let capturedArchive: { kind: WorkerTerminalArchiveKind; content: string } | undefined
   const structured = resolveStructuredWorkerForDispatch(db, dispatchId)
   if (!archive) {
-    const captured = await captureWorkerOutputArchive({
+    const capture = await captureWorkerReleaseArchive({
+      db,
+      resource,
       runtime,
       dispatchId,
       terminalHandle,
       attachedAtMs: orchestrationTimestampToMs(worker.created_at),
       structuredWorker: structured
     })
+    if ('receipt' in capture) {
+      return capture.receipt
+    }
+    const { captured } = capture
     capturedArchive = { kind: captured.kind, content: JSON.stringify(captured.content) }
     archiveSource = captured.kind === 'terminal_tail' ? 'terminal' : 'transcript'
     archiveStatus = captured.status

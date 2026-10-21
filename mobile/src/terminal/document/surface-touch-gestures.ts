@@ -1,7 +1,8 @@
+import { getCellHeight, getTotalScale } from './cell-metrics'
 import type { TerminalDocumentScope } from './document-scope'
 import { scheduleDocumentFrame } from './document-frame-registry'
 import { touchesInRoot } from './document-host-seams'
-import { clampPan, getCellHeight } from './fit-scale'
+import { clampPan } from './fit-scale'
 import { notify } from './host-notify'
 import { attachSurfaceMouseClickDragHandler } from './mouse-click-drag'
 import { routeScrollLines, shouldRouteScrollToTerminalInput } from './mouse-input-encoding'
@@ -17,8 +18,12 @@ import {
   MIN_TEXT_SCALE,
   snapToTextScalePreset
 } from './text-scaling'
-import { getTotalScale, updateTransform } from './viewport-transform'
+import { updateTransform } from './viewport-transform'
+import { viewportPoint } from './viewport-cell'
 import { attachSurfaceWheelHandler } from './wheel-scroll'
+
+/** How long after the last touchmove its velocity still launches momentum, in milliseconds. */
+const RELEASE_VELOCITY_MAX_AGE_MS = 100
 
 /** A surface that has already been wired, so a re-mount does not stack handlers. */
 type TerminalGestureSurface = HTMLElement & { __orcaSurfaceHandlersAttached?: boolean }
@@ -60,6 +65,11 @@ export function getDistance(a: Touch, b: Touch) {
   return Math.sqrt(dx * dx + dy * dy)
 }
 
+/** The pinch's anchor, in the grid's frame: the point between the two fingers. */
+function pinchMidpoint(scope: TerminalDocumentScope, a: Touch, b: Touch) {
+  return viewportPoint(scope, (a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2)
+}
+
 export function attachSurfaceEventHandlers(
   scope: TerminalDocumentScope,
   targetSurface: TerminalGestureSurface
@@ -93,24 +103,26 @@ export function attachSurfaceEventHandlers(
   targetSurface.addEventListener(
     'touchstart',
     function (e) {
-      if (dispatcherShouldBlockSurface(scope)) {
+      if (targetSurface !== scope.surface || dispatcherShouldBlockSurface(scope)) {
         return
       }
       if (scope.touchGesture.momentumId) {
         cancelAnimationFrame(scope.touchGesture.momentumId)
         scope.touchGesture.momentumId = null
+        // Why: this touch stopped a coast; lifting it must not also tap.
+        scope.tapCandidate = null
       }
       const touches = touchesInRoot(scope.root, e.touches)
       if (touches.length === 2) {
+        stopSurfaceTouchGestures(scope)
+        resetSmoothScrollOffset(scope)
         scope.touchGesture.isPinching = true
-        scope.smoothScrollOffsetY = 0
         scope.touchGesture.pinchDist = getDistance(touches[0], touches[1])
         scope.touchGesture.pinchScale = scope.userScale
-        const mx = (touches[0].clientX + touches[1].clientX) / 2
-        const my = (touches[0].clientY + touches[1].clientY) / 2
+        const mid = pinchMidpoint(scope, touches[0], touches[1])
         const total = getTotalScale(scope)
-        scope.touchGesture.pinchSurfX = (mx - scope.panX) / total
-        scope.touchGesture.pinchSurfY = (my - scope.panY) / total
+        scope.touchGesture.pinchSurfX = (mid.x - scope.panX) / total
+        scope.touchGesture.pinchSurfY = (mid.y - scope.panY) / total
       } else if (touches.length === 1) {
         scope.touchGesture.isPinching = false
         scope.touchGesture.lastX = touches[0].clientX
@@ -126,7 +138,7 @@ export function attachSurfaceEventHandlers(
   targetSurface.addEventListener(
     'touchmove',
     function (e) {
-      if (dispatcherShouldBlockSurface(scope)) {
+      if (targetSurface !== scope.surface || dispatcherShouldBlockSurface(scope)) {
         return
       }
       if (!scope.term) {
@@ -139,8 +151,7 @@ export function attachSurfaceEventHandlers(
       if (touches.length === 2) {
         scope.touchGesture.isPinching = true
         const dist = getDistance(touches[0], touches[1])
-        const mx = (touches[0].clientX + touches[1].clientX) / 2
-        const my = (touches[0].clientY + touches[1].clientY) / 2
+        const mid = pinchMidpoint(scope, touches[0], touches[1])
 
         const ratio = dist / scope.touchGesture.pinchDist
         // Why: userScale is a CSS multiplier on the current font size; bound it so
@@ -153,8 +164,8 @@ export function attachSurfaceEventHandlers(
           Math.min(hiScale, scope.touchGesture.pinchScale * ratio)
         )
         const total = getTotalScale(scope)
-        scope.panX = mx - scope.touchGesture.pinchSurfX * total
-        scope.panY = my - scope.touchGesture.pinchSurfY * total
+        scope.panX = mid.x - scope.touchGesture.pinchSurfX * total
+        scope.panY = mid.y - scope.touchGesture.pinchSurfY * total
         clampPan(scope)
         updateTransform(scope)
       } else if (touches.length === 1 && !scope.touchGesture.isPinching) {
@@ -170,7 +181,7 @@ export function attachSurfaceEventHandlers(
         // single-finger scrolling, scrollback included.
         if (
           scope.term.element &&
-          scope.term.element.scrollWidth * getTotalScale(scope) > window.innerWidth + 1
+          scope.term.element.scrollWidth * getTotalScale(scope) > scope.viewportRect().width + 1
         ) {
           scope.panX += x - scope.touchGesture.lastX
           clampPan(scope)
@@ -188,6 +199,8 @@ export function attachSurfaceEventHandlers(
           if (lines !== 0) {
             scope.touchGesture.accumDelta -= lines * effectiveCellH
             routeScrollLines(scope, lines, x, y)
+            // Why: a touch that scrolled a row is a scroll, even inside TAP_SLOP.
+            scope.tapCandidate = null
           }
         } else {
           if (enqueueNormalBufferScrollDelta(scope, deltaY)) {
@@ -206,7 +219,7 @@ export function attachSurfaceEventHandlers(
   targetSurface.addEventListener(
     'touchend',
     function (e) {
-      if (dispatcherShouldBlockSurface(scope)) {
+      if (targetSurface !== scope.surface || dispatcherShouldBlockSurface(scope)) {
         return
       }
       if (!scope.term) {
@@ -242,7 +255,9 @@ export function attachSurfaceEventHandlers(
       }
 
       if (touches.length === 0) {
-        let vel = scope.touchGesture.velY
+        // Why: velY is the speed of the last move; a finger that then rested has none to launch.
+        const rested = Date.now() - scope.touchGesture.lastTime > RELEASE_VELOCITY_MAX_AGE_MS
+        let vel = rested ? 0 : scope.touchGesture.velY
         const FRICTION = 0.972
         const MIN_VEL = 0.012
         let lastMomentumTime = performance.now()
@@ -279,6 +294,18 @@ export function attachSurfaceEventHandlers(
     },
     { capture: true, passive: true }
   )
+
+  targetSurface.addEventListener(
+    'touchcancel',
+    function () {
+      if (targetSurface !== scope.surface) {
+        return
+      }
+      stopSurfaceTouchGestures(scope)
+      resetSmoothScrollOffset(scope)
+    },
+    { capture: true, passive: true }
+  )
 }
 
 export function startSurfaceTouchGestures(scope: TerminalDocumentScope) {
@@ -291,4 +318,7 @@ export function stopSurfaceTouchGestures(scope: TerminalDocumentScope) {
     cancelAnimationFrame(scope.touchGesture.momentumId)
     scope.touchGesture.momentumId = null
   }
+  scope.touchGesture.velY = 0
+  scope.touchGesture.accumDelta = 0
+  scope.touchGesture.isPinching = false
 }

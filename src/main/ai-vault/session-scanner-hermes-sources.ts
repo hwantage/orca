@@ -13,6 +13,7 @@ import type {
   SessionFileDiscovery
 } from './session-scanner-types'
 import { sessionRootDirs } from './session-scanner-roots'
+import { scopeWalksAgentFiles } from './session-scope-cwd'
 
 const HERMES_SESSIONS_DIR = join(homedir(), '.hermes', 'sessions')
 
@@ -74,7 +75,9 @@ export function hermesDiscoveries(
       agent: 'hermes',
       issues,
       extensions: ['.json'],
-      filePredicate: (path) => basename(path).startsWith('session_')
+      filePredicate: (path) => basename(path).startsWith('session_'),
+      keepScopeFiles: scopeWalksAgentFiles('hermes', options.scopePaths),
+      signal: options.signal
     })
   )
 
@@ -88,24 +91,21 @@ export function hermesDiscoveries(
       ([fileResults, sqlite]) => {
         const sqliteFiles = sqlite.candidates.map((c) => c.file)
 
-        // Why: collect all legacy JSON session files across all root dirs (local & WSL)
-        // and filter out any that are duplicated in the SQLite database.
-        const allFiles: FileWithMtime[] = []
-        for (const res of fileResults) {
-          for (const file of res.files) {
-            const name = basename(file.path, '.json')
-            const sessionId = name.startsWith('session_') ? name.slice(8) : name
-            if (!sqlite.sessionIds.has(sessionId)) {
-              allFiles.push(file)
-            }
-          }
+        const isLegacyOnly = (file: FileWithMtime): boolean => {
+          const name = basename(file.path, '.json')
+          const sessionId = name.startsWith('session_') ? name.slice(8) : name
+          return !sqlite.sessionIds.has(sessionId)
         }
-        allFiles.push(...sqliteFiles)
+        const allFiles = fileResults.flatMap((res) => res.files.filter(isLegacyOnly))
+        const scopeFiles = fileResults.some((res) => res.scopeFiles)
+          ? fileResults.flatMap((res) => (res.scopeFiles ?? []).filter(isLegacyOnly))
+          : undefined
 
         return {
           agent: 'hermes' as const,
           rootDir: fileResults[0]?.rootDir ?? HERMES_SESSIONS_DIR,
-          files: allFiles
+          files: [...allFiles, ...sqliteFiles],
+          ...(scopeFiles ? { scopeFiles } : {})
         }
       }
     )

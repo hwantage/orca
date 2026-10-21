@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import { useSoftKeyboard } from '../platform/keyboard-occlusion'
 import { useTerminalViewportRefit } from '../terminal/terminal-viewport-refit'
-import { saveCustomKeys, type CustomKey } from '../components/CustomKeyModal'
+import { removeCustomKey, type CustomKey } from '../terminal/terminal-custom-keys'
 import { writeLastVisitedWorktree } from '../worktree/last-visited-worktree-repo'
 import { resolveTabStripScrollOffset } from './tab-strip-scroll'
 import type { MobileSessionLifecycleModel } from './use-mobile-session-lifecycle'
@@ -16,10 +16,8 @@ export type MobileSessionKeyboardScope = Pick<
   | 'activeSessionTabId'
   | 'clientRef'
   | 'connState'
-  | 'customKeys'
   | 'deviceTokenRef'
   | 'hostId'
-  | 'initializedHandlesRef'
   | 'router'
   | 'setCustomKeys'
   | 'setKeyboardHeight'
@@ -31,8 +29,7 @@ export type MobileSessionKeyboardScope = Pick<
   | 'tabStripOffsetRef'
   | 'tabStripRef'
   | 'tabStripViewportWidthRef'
-  | 'terminalFrameHeightRef'
-  | 'terminalFrameWidth'
+  | 'terminalFrameRef'
   | 'terminalRefs'
   | 'terminals'
   | 'terminalTextScale'
@@ -56,7 +53,6 @@ export function useMobileSessionKeyboardState(scope: MobileSessionKeyboardScope)
     tabStripViewportWidthRef,
     tabStripContentWidthRef,
     tabLayoutsRef,
-    customKeys,
     setCustomKeys,
     setShowCustomKeyModal,
     setKeyboardHeight,
@@ -65,29 +61,30 @@ export function useMobileSessionKeyboardState(scope: MobileSessionKeyboardScope)
     viewportRef,
     viewportMeasuredRef,
     terminalRefs,
-    initializedHandlesRef,
     activeHandleRef,
-    terminalFrameHeightRef,
-    terminalFrameWidth,
+    terminalFrameRef,
     showNativeChatRef,
     unsubscribeTerminal,
     subscribeToTerminal
   } = scope
   // Why: non-subscribe layout refits (tab strip, fold, rotation) live in a dedicated hook — see terminal-viewport-refit.ts.
-  const { notifyTerminalFrameHeight, notifyKeyboardVisibility } = useTerminalViewportRefit({
+  const {
+    notifyTerminalFrameHeight,
+    notifyTerminalFrameWidth,
+    notifyKeyboardVisibility,
+    notifyTerminalCellBoxChange
+  } = useTerminalViewportRefit({
     activeHandleRef,
     terminalRefs,
-    terminalFrameHeightRef,
+    terminalFrameRef,
     viewportRef,
     viewportMeasuredRef,
     nativeChatCoveredRef: showNativeChatRef,
     clientRef,
     deviceTokenRef,
-    initializedHandlesRef,
     connState,
     tabStripVisible: terminals.length > 1,
     textScale: terminalTextScale,
-    terminalFrameWidth,
     unsubscribeTerminal,
     subscribeToTerminal
   })
@@ -136,14 +133,13 @@ export function useMobileSessionKeyboardState(scope: MobileSessionKeyboardScope)
     }
   }, [hostId, worktreeId])
 
-  const handleDeleteCustomKey = useCallback(
-    async (key: CustomKey) => {
-      const updated = customKeys.filter((k) => k.id !== key.id)
-      setCustomKeys(updated)
-      await saveCustomKeys(updated)
-    },
-    [customKeys]
-  )
+  const handleDeleteCustomKey = useCallback(async (key: CustomKey) => {
+    try {
+      setCustomKeys(await removeCustomKey(key.id))
+    } catch (error) {
+      console.warn('[custom-keys] the store would not take this removal', error)
+    }
+  }, [])
 
   const handleManageShortcuts = useCallback(() => {
     setShowCustomKeyModal(false)
@@ -151,7 +147,9 @@ export function useMobileSessionKeyboardState(scope: MobileSessionKeyboardScope)
   }, [router])
   return {
     notifyTerminalFrameHeight,
+    notifyTerminalFrameWidth,
     notifyKeyboardVisibility,
+    notifyTerminalCellBoxChange,
     scrollActiveTabIntoView,
     handleDeleteCustomKey,
     handleManageShortcuts

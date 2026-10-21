@@ -1,11 +1,10 @@
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
-import { View, Pressable, StyleSheet, Platform, useWindowDimensions, Keyboard } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { View, Pressable, StyleSheet, Platform, Keyboard } from 'react-native'
+import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  useAnimatedScrollHandler,
   withSpring,
   withTiming,
   runOnJS,
@@ -79,8 +78,7 @@ function MountedRightDrawer({
 }: MountedRightDrawerProps) {
   const translateX = useSharedValue(0)
   const progress = useSharedValue(0)
-  const scrollOffsetY = useSharedValue(0)
-  const { width: screenWidth } = useWindowDimensions()
+  const { width: screenWidth } = useSafeAreaFrame()
   const insets = useSafeAreaInsets()
   const { isWideLayout } = useResponsiveLayout()
   const panelWidth = resolveRightDrawerPanelWidth(screenWidth, isWideLayout, widthPx)
@@ -88,7 +86,6 @@ function MountedRightDrawer({
   useEffect(() => {
     if (visible) {
       translateX.value = 0
-      scrollOffsetY.value = 0
       progress.value = withTiming(1, { duration: SHOW_DURATION })
     } else {
       Keyboard.dismiss()
@@ -115,10 +112,6 @@ function MountedRightDrawer({
   const dismiss = useCallback(() => {
     onClose()
   }, [onClose])
-
-  const scrollHandler = useAnimatedScrollHandler((event) => {
-    scrollOffsetY.value = Math.max(event.contentOffset.y, 0)
-  })
 
   const scrollGesture = Gesture.Native()
   // Why: swipe-from-right (positive translationX) dismisses; the horizontal
@@ -195,8 +188,6 @@ function MountedRightDrawer({
                 <Animated.ScrollView
                   bounces={false}
                   keyboardShouldPersistTaps="handled"
-                  onScroll={scrollHandler}
-                  scrollEventThrottle={16}
                   showsVerticalScrollIndicator={false}
                 >
                   {children}

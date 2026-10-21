@@ -1,4 +1,7 @@
+import { parseQoderSessionFile } from './session-scanner-qoder-parser'
+import { parseCodebuddySessionFile } from './session-scanner-codebuddy-parser'
 import type { AiVaultSession } from '../../shared/ai-vault-types'
+import { throwIfSignalAborted } from '../../shared/abort-signal-reason'
 import { parseDevinSessionFile } from './session-scanner-devin-parser'
 import { parseAntigravitySessionFile } from './session-scanner-antigravity-parser'
 import { parseDroidSessionFile } from './session-scanner-droid-parser'
@@ -10,11 +13,15 @@ import { splitHermesSqliteCandidate } from './session-scanner-hermes-sqlite-path
 import { parseHermesSqliteSession } from './session-scanner-hermes-sqlite'
 import { parseMuseSessionFile } from './session-scanner-muse-parser'
 import { splitOpenCodeSqliteCandidate } from './session-scanner-opencode-sqlite-paths'
+import { parseJcodeSessionFile } from './session-scanner-jcode-parser'
+import { parseKiroSessionFile } from './session-scanner-kiro-parser'
 import {
   captureOpenCodeSqliteSessionViaWorker,
   captureOpenCode2SqliteSessionViaWorker,
+  captureZcodeSqliteSessionViaWorker,
   parseOpenCode2SqliteSessionViaWorker,
-  parseOpenCodeSqliteSessionViaWorker
+  parseOpenCodeSqliteSessionViaWorker,
+  parseZcodeSqliteSessionViaWorker
 } from './session-scanner-opencode-sqlite-worker-spawn'
 import { parseClaudeSessionFile } from './session-scanner-primary-parsers'
 import { parseGeminiSessionFile } from './session-scanner-gemini-parsers'
@@ -37,17 +44,36 @@ import type { TranscriptMessageSink } from './session-transcript-consumers'
 async function readOpenCodeSqliteCandidate(
   sqliteCandidate: { dbPath: string; sessionId: string },
   platform: NodeJS.Platform,
-  messages?: TranscriptMessageSink
+  messages?: TranscriptMessageSink,
+  signal?: AbortSignal,
+  agent?: 'opencode2' | 'zcode'
 ): Promise<AiVaultSession | null> {
-  const request = { ...sqliteCandidate, platform }
+  throwIfSignalAborted(signal)
+  const request = { ...sqliteCandidate, platform, signal }
   if (!messages?.active) {
-    return parseOpenCodeSqliteSessionViaWorker(request)
+    const parse =
+      agent === 'opencode2'
+        ? parseOpenCode2SqliteSessionViaWorker
+        : agent === 'zcode'
+          ? parseZcodeSqliteSessionViaWorker
+          : parseOpenCodeSqliteSessionViaWorker
+    const session = await parse(request)
+    throwIfSignalAborted(signal)
+    return session
   }
-  const capture = await captureOpenCodeSqliteSessionViaWorker(request)
-  for (const message of capture.messages) {
+  const capture =
+    agent === 'opencode2'
+      ? captureOpenCode2SqliteSessionViaWorker
+      : agent === 'zcode'
+        ? captureZcodeSqliteSessionViaWorker
+        : captureOpenCodeSqliteSessionViaWorker
+  const result = await capture(request)
+  for (const message of result.messages) {
+    throwIfSignalAborted(signal)
     messages.push(message)
   }
-  return capture.session
+  throwIfSignalAborted(signal)
+  return result.session
 }
 
 /**
@@ -63,9 +89,14 @@ async function readOpenCodeSqliteCandidate(
 export async function parseAgentSessionFile(
   candidate: SessionFileCandidate,
   platform: NodeJS.Platform,
-  messages?: TranscriptMessageSink
+  messages?: TranscriptMessageSink,
+  signal?: AbortSignal
 ): Promise<AiVaultSession | null> {
   switch (candidate.agent) {
+    case 'qoder':
+      return parseQoderSessionFile(candidate.file, platform, messages)
+    case 'codebuddy':
+      return parseCodebuddySessionFile(candidate.file, platform, messages)
     case 'claude':
       return parseClaudeSessionFile(candidate.file, platform, messages)
     case 'codex':
@@ -77,7 +108,7 @@ export async function parseAgentSessionFile(
         messages
       )
     case 'gemini':
-      return parseGeminiSessionFile(candidate.file, platform, messages)
+      return parseGeminiSessionFile(candidate.file, platform, messages, signal)
     case 'antigravity':
       return parseAntigravitySessionFile(candidate.file, platform, messages)
     case 'copilot':
@@ -90,7 +121,7 @@ export async function parseAgentSessionFile(
       // real filesystem paths and fall through to the JSON parser.
       const sqliteCandidate = splitOpenCodeSqliteCandidate(candidate.file.path)
       if (sqliteCandidate) {
-        return readOpenCodeSqliteCandidate(sqliteCandidate, platform, messages)
+        return readOpenCodeSqliteCandidate(sqliteCandidate, platform, messages, signal)
       }
       return parseOpenCodeSessionFile(candidate.file, platform, messages)
     }
@@ -100,24 +131,15 @@ export async function parseAgentSessionFile(
       // candidate path; there is no legacy file store.
       const sqliteCandidate = splitOpenCodeSqliteCandidate(candidate.file.path)
       if (sqliteCandidate) {
-        if (messages?.active) {
-          const capture = await captureOpenCode2SqliteSessionViaWorker({
-            dbPath: sqliteCandidate.dbPath,
-            sessionId: sqliteCandidate.sessionId,
-            platform
-          })
-          for (const message of capture.messages) {
-            messages.push(message)
-          }
-          return capture.session
-        }
-        return parseOpenCode2SqliteSessionViaWorker({
-          dbPath: sqliteCandidate.dbPath,
-          sessionId: sqliteCandidate.sessionId,
-          platform
-        })
+        return readOpenCodeSqliteCandidate(sqliteCandidate, platform, messages, signal, 'opencode2')
       }
       return null
+    }
+    case 'zcode': {
+      const sqliteCandidate = splitOpenCodeSqliteCandidate(candidate.file.path, 'zcode')
+      return sqliteCandidate
+        ? readOpenCodeSqliteCandidate(sqliteCandidate, platform, messages, signal, 'zcode')
+        : null
     }
     case 'grok':
       return parseGrokSessionFile(candidate.file, platform, messages)
@@ -131,7 +153,7 @@ export async function parseAgentSessionFile(
           messages
         })
       }
-      return parseHermesSessionFile(candidate.file, platform, messages)
+      return parseHermesSessionFile(candidate.file, platform, messages, signal)
     }
     case 'rovo':
       return parseRovoSessionFile(candidate.file, platform, messages)
@@ -146,12 +168,16 @@ export async function parseAgentSessionFile(
     case 'droid':
       return parseDroidSessionFile(candidate.file, platform, messages)
     case 'cline':
-      return parseClineSessionFile(candidate.file, platform, messages)
+      return parseClineSessionFile(candidate.file, platform, messages, signal)
     case 'devin':
-      return parseDevinSessionFile(candidate.file, platform, messages)
+      return parseDevinSessionFile(candidate.file, platform, messages, signal)
     case 'kimi':
       return parseKimiSessionFile(candidate.file, platform, messages)
     case 'muse':
       return parseMuseSessionFile(candidate.file, platform, messages)
+    case 'jcode':
+      return parseJcodeSessionFile(candidate.file, platform, messages)
+    case 'kiro':
+      return parseKiroSessionFile(candidate.file, platform, messages)
   }
 }
