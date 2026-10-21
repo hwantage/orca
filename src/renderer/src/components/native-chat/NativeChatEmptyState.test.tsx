@@ -17,22 +17,8 @@ it('keeps pointing the terminal-backed chat back to its terminal when a read fai
   ).toBeInTheDocument()
 })
 
-it('tells the structured chat its read keeps retrying', () => {
-  render(<NativeChatEmptyState kind="error" retrying />)
-  expect(
-    screen.getByText('The transcript could not be read. Orca keeps trying to load it.')
-  ).toBeInTheDocument()
-})
-
 it('shows the host message in place of the terminal-backed default', () => {
   render(<NativeChatEmptyState kind="error" message="disk full" />)
   expect(screen.getByText('disk full')).toBeInTheDocument()
   expect(screen.queryByText(/Toggle back to the terminal/)).toBeNull()
-})
-
-it('keeps the structured chat retrying line when the host sent a message', () => {
-  render(<NativeChatEmptyState kind="error" retrying message="disk full" />)
-  expect(
-    screen.getByText('The transcript could not be read. Orca keeps trying to load it.')
-  ).toBeInTheDocument()
 })

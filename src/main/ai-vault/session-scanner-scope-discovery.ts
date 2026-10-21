@@ -6,7 +6,7 @@ import {
   wslGatedStat
 } from '../native-chat/wsl-transcript-fs-access'
 import { WslTranscriptFsError } from '../native-chat/wsl-transcript-fs-gate'
-import { isPathInsideOrEqual } from '../../shared/cross-platform-path'
+import { createAiVaultScopeCwdMatcher } from '../../shared/ai-vault-scope-cwd-match'
 import type { CwdBucketLayout } from './session-cwd-bucket-layouts'
 import type { AiVaultAgent, AiVaultScanIssue } from '../../shared/ai-vault-types'
 import { parseWslUncPath } from '../../shared/wsl-paths'
@@ -20,7 +20,7 @@ const REPRESENTATIVE_CWD_LINE_LIMIT = 200
 const REPRESENTATIVE_FILE_LIMIT = 3
 const TRANSCRIPT_EXTENSIONS = new Set(['.jsonl'])
 
-// Both encodings are lossy; retain Claude’s existing cache and verify each Pi transcript.
+// Bucket encodings are lossy; retain Claude’s cache and verify other transcripts individually.
 const PROJECT_DIR_CWD_CACHE_MAX = 2048
 const projectDirCwdCache = new Map<string, string>()
 
@@ -75,7 +75,7 @@ type InScopeDiscoveryArgs = {
 }
 
 /**
- * Fully include the transcripts of cwd-bucket directories (Claude, Pi) whose cwd
+ * Fully include the transcripts of cwd-bucket directories (Claude, Pi, CodeBuddy) whose cwd
  * falls inside the active workspace/project paths.
  *
  * Why: these agents keep one directory per cwd, e.g. `~/.claude/projects/<cwd-encoded>/`.
@@ -92,6 +92,7 @@ export async function discoverInScopeCwdBucketFiles(
     return []
   }
   const scopeProjectPrefixes = cwdBucketScopePrefixes(layout, args.scopePaths)
+  const inScope = createAiVaultScopeCwdMatcher(args.scopePaths)
   const collected = new Map<string, FileWithMtime>()
   for (const rootDir of args.rootDirs) {
     for (const projectDir of await listProjectDirs(
@@ -102,13 +103,13 @@ export async function discoverInScopeCwdBucketFiles(
     )) {
       if (layout.agent === 'claude') {
         const cwd = await cachedProjectDirCwd(projectDir, args.issues, layout.agent)
-        if (!cwd || !args.scopePaths.some((scopePath) => isCwdInsideScopePath(scopePath, cwd))) {
+        if (!inScope(cwd, projectDir)) {
           continue
         }
       }
       await collectBucketFiles({
         agent: layout.agent,
-        scopePaths: layout.agent === 'pi' ? args.scopePaths : undefined,
+        inScope: layout.agent !== 'claude' ? inScope : undefined,
         projectDir,
         issues: args.issues,
         collected,
@@ -138,21 +139,6 @@ function cwdBucketScopePrefixes(
 function scopePathCandidates(scopePath: string): string[] {
   const wslScopePath = parseWslUncPath(scopePath)
   return wslScopePath ? [scopePath, wslScopePath.linuxPath] : [scopePath]
-}
-
-function isCwdInsideScopePath(scopePath: string, cwd: string): boolean {
-  if (isPathInsideOrEqual(scopePath, cwd)) {
-    return true
-  }
-
-  const wslScopePath = parseWslUncPath(scopePath)
-  if (!wslScopePath) {
-    return false
-  }
-
-  // WSL transcripts record Linux cwd values even when the renderer sends the
-  // active worktree as a Windows UNC path.
-  return isPathInsideOrEqual(wslScopePath.linuxPath, cwd)
 }
 
 async function listProjectDirs(
@@ -252,7 +238,7 @@ async function readFirstCwd(
 
 async function collectBucketFiles(args: {
   agent: AiVaultAgent
-  scopePaths?: readonly string[]
+  inScope?: ReturnType<typeof createAiVaultScopeCwdMatcher>
   projectDir: string
   issues: AiVaultScanIssue[]
   collected: Map<string, FileWithMtime>
@@ -275,9 +261,9 @@ async function collectBucketFiles(args: {
       continue
     }
     try {
-      if (args.scopePaths) {
+      if (args.inScope) {
         const cwd = await readFirstCwd(path, args.issues, args.agent)
-        if (!cwd || !args.scopePaths.some((scope) => isCwdInsideScopePath(scope, cwd))) {
+        if (!args.inScope(cwd, path)) {
           continue
         }
       }
