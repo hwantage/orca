@@ -3,17 +3,18 @@ import type WebSocket from 'ws'
 import type { PairedRuntimeConnection } from './paired-runtime-connection'
 import type { RemoteRuntimeClientError } from './remote-runtime-client-error'
 import { remoteRuntimeClientCapabilities } from './remote-runtime-client-capabilities'
-import { remoteRuntimeUnavailableError } from './remote-runtime-request-frames'
+import { remoteRuntimeUnavailableError } from './remote-runtime/requests/remote-runtime-request-frames'
 import { openSharedControlSocket } from './remote-runtime-shared-control-open'
+import { closeSharedControlAfterError } from './remote-runtime-shared-control-refusal'
 import * as sharedControlReady from './remote-runtime-shared-control-ready'
 import * as sharedControlProtocol from './remote-runtime-shared-control-protocol'
 import { SharedControlReconnectScheduler } from './remote-runtime-shared-control-reconnect'
-import { requestSharedControl } from './remote-runtime-shared-control-requests'
-import { SharedControlRetiredRequestIds } from './remote-runtime-shared-control-retired-request-ids'
+import { requestSharedControl } from './remote-runtime/requests/remote-runtime-shared-control-requests'
+import { SharedControlRetiredRequestIds } from './remote-runtime/requests/remote-runtime-shared-control-retired-request-ids'
 import { SharedControlReadyStableResetTimer } from './remote-runtime-shared-control-stability'
 import * as sharedControlState from './remote-runtime-shared-control-state'
 import { closeSharedControlSocket } from './remote-runtime-shared-control-socket-close'
-import { startSharedControlSubscription } from './remote-runtime-shared-control-subscription-start'
+import { startSharedControlSubscription } from './remote-runtime/requests/remote-runtime-shared-control-subscription-start'
 import { SharedControlSocketGeneration } from './remote-runtime-shared-control-socket-generation'
 import { refreshRemoteRuntimeSharedControl } from './remote-runtime-shared-control-refresh'
 import { SharedControlDiagnosticsTracker } from './remote-runtime-shared-control-diagnostics'
@@ -125,6 +126,10 @@ export class RemoteRuntimeSharedControlConnection {
   private publishDiagnostics(): void {
     this.diagnostics.publish(this.diagnosticsCounts())
   }
+  isReady(): boolean {
+    const { state, ws, handshake } = this
+    return sharedControlReady.isSharedControlReady({ state, ws, handshake })
+  }
   getDiagnostics(): SharedControlTypes.RemoteRuntimeSharedConnectionDiagnostics {
     return this.diagnostics.get(this.diagnosticsCounts())
   }
@@ -140,11 +145,7 @@ export class RemoteRuntimeSharedControlConnection {
   reconnectNow(): void {
     refreshRemoteRuntimeSharedControl({
       intentionallyClosed: this.intentionallyClosed,
-      ready: sharedControlReady.isSharedControlReady({
-        state: this.state,
-        ws: this.ws,
-        handshake: this.handshake
-      }),
+      ready: this.isReady(),
       refresh: () => {
         this.closeSocket(
           remoteRuntimeUnavailableError('Refreshing remote runtime control transport.'),
@@ -267,27 +268,27 @@ export class RemoteRuntimeSharedControlConnection {
     })
   }
 
-  private handleSocketClosed(error: RemoteRuntimeClientError, socketGeneration: number): void {
-    if (
-      !this.socketGeneration.acceptClose({
-        generation: socketGeneration,
-        error,
-        everReady: this.everReady,
-        subscriptions: this.subscriptions,
-        closeSocket: () => this.closeSocket(error)
-      })
-    ) {
-      return
-    }
-    this.diagnostics.markError(error.message)
-    this.reconnect.scheduleAfterSocketClose({
-      intentionallyClosed: this.intentionallyClosed,
-      manuallyDisconnected: this.options.isManuallyDisconnected?.() ?? false,
-      capabilityPaused: this.options.isCapabilityPaused?.() ?? false,
-      subscriptionCount: this.subscriptions.size,
-      open: () => this.open()
+  private handleSocketClosed(refused: RemoteRuntimeClientError, socketGeneration: number): void {
+    closeSharedControlAfterError({
+      refused,
+      socketGeneration,
+      generation: this.socketGeneration,
+      onAuthenticationRejected: this.options.onAuthenticationRejected,
+      everReady: this.everReady,
+      subscriptions: this.subscriptions,
+      closeSocket: (error) => this.closeSocket(error),
+      markError: (message) => this.diagnostics.markError(message),
+      isClosed: () => this.state === 'closed',
+      retry: () =>
+        this.reconnect.scheduleAfterSocketClose({
+          intentionallyClosed: this.intentionallyClosed,
+          manuallyDisconnected: this.options.isManuallyDisconnected?.() ?? false,
+          capabilityPaused: this.options.isCapabilityPaused?.() ?? false,
+          subscriptionCount: this.subscriptions.size,
+          open: () => this.open()
+        }),
+      publishDiagnostics: () => this.publishDiagnostics()
     })
-    this.publishDiagnostics()
   }
 
   private closeSocket(error?: Error, preserveReadyWaitersAndPendingRequests = false): void {

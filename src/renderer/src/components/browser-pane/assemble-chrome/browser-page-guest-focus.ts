@@ -1,4 +1,5 @@
 import { useMemo, type RefObject } from 'react'
+import { hasBrowserClientPageAttachedGuest } from '../browser-client-page-retained-elements'
 
 /**
  * How a browser pane hands focus to whatever renders the page. Panes differ in what that
@@ -20,13 +21,9 @@ export function useWebviewGuestFocus(
   return useMemo(
     () => ({
       blur: () => webviewRef.current?.blur(),
-      isAttached: () => {
-        try {
-          return (webviewRef.current?.getWebContentsId() ?? 0) > 0
-        } catch {
-          return false
-        }
-      },
+      // Why the live guest: focusing a webview before its guest attaches is lost once it does.
+      isAttached: () =>
+        webviewRef.current !== null && hasBrowserClientPageAttachedGuest(webviewRef.current),
       focus: () => {
         const webview = webviewRef.current
         if (!webview) {

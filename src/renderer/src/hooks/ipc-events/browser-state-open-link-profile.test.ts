@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { createBrowserTabMock, requestBrowserFocusMock, storeState } = vi.hoisted(() => ({
+const { createBrowserTabMock, dispatchEventMock, storeState } = vi.hoisted(() => ({
   createBrowserTabMock: vi.fn(),
-  requestBrowserFocusMock: vi.fn(),
+  dispatchEventMock: vi.fn(),
   storeState: {
     value: {} as Record<string, unknown>
   }
@@ -12,13 +12,10 @@ vi.mock('../../store', () => ({
   useAppStore: { getState: () => storeState.value }
 }))
 vi.mock('@/lib/worktree-runtime-owner', () => ({
-  runtimeEnvironmentIdWithLegacyFallbackUnlessTwin: () => null
+  runtimeEnvironmentIdOrLocalUnlessTwin: () => null
 }))
 vi.mock('@/components/browser-pane/describe-page/live-browser-url-registry', () => ({
   rememberLiveBrowserUrl: vi.fn()
-}))
-vi.mock('@/components/browser-pane/host-guest/browser-focus', () => ({
-  requestBrowserFocus: requestBrowserFocusMock
 }))
 vi.mock('./browser-automation-bootstrap-lease', () => ({
   acquireBrowserAutomationBootstrapLease: vi.fn()
@@ -56,7 +53,7 @@ function captureOpenLinkHandler(): (event: {
         ? target[property as string]
         : new Proxy({}, { get: () => () => noopUnsubscribe })
   })
-  ;(globalThis as { window?: unknown }).window = { api }
+  vi.stubGlobal('window', { api, dispatchEvent: dispatchEventMock })
 
   registerBrowserStateIpcBridge([], () => false)
   if (!handler) {
@@ -67,8 +64,9 @@ function captureOpenLinkHandler(): (event: {
 
 describe('link-opened Orca tabs', () => {
   beforeEach(() => {
-    createBrowserTabMock.mockReset().mockReturnValue({ activePageId: 'page-2' })
-    requestBrowserFocusMock.mockReset()
+    createBrowserTabMock.mockReset()
+    dispatchEventMock.mockReset()
+    createBrowserTabMock.mockReturnValue({ id: 'new-tab', activePageId: 'new-page' })
   })
 
   it('inherits the opener tab session so an isolated profile cannot leak into the default one', () => {
@@ -107,7 +105,8 @@ describe('link-opened Orca tabs', () => {
     )
   })
 
-  it('leaves the profile unset when the opener tab is gone, so the user default still applies', () => {
+  // Baseline defect: remove .fails when the captured-claim handoff rejects this event.
+  it.fails('rejects a missing source tab without default-profile fallback', () => {
     storeState.value = {
       browserPagesByWorkspace: {
         'workspace-1': [{ id: 'page-1', workspaceId: 'missing', worktreeId: 'worktree-1' }]
@@ -118,37 +117,10 @@ describe('link-opened Orca tabs', () => {
 
     captureOpenLinkHandler()({ browserPageId: 'page-1', url: 'https://docs.example.com/guide' })
 
-    const options = createBrowserTabMock.mock.calls[0][2] as Record<string, unknown>
-    expect('sessionProfileId' in options).toBe(false)
+    expect(createBrowserTabMock).not.toHaveBeenCalled()
   })
 
-  it.each([true, undefined])('focuses an activated link when activate is %s', (activate) => {
-    storeState.value = {
-      browserPagesByWorkspace: {
-        'workspace-1': [{ id: 'page-1', workspaceId: 'workspace-1', worktreeId: 'worktree-1' }]
-      },
-      browserTabsByWorktree: {},
-      createBrowserTab: createBrowserTabMock
-    }
-
-    captureOpenLinkHandler()({
-      browserPageId: 'page-1',
-      url: 'https://docs.example.com/foreground',
-      activate
-    })
-
-    expect(createBrowserTabMock).toHaveBeenCalledWith(
-      'worktree-1',
-      'https://docs.example.com/foreground',
-      expect.objectContaining({ activate: true })
-    )
-    expect(requestBrowserFocusMock).toHaveBeenCalledExactlyOnceWith({
-      pageId: 'page-2',
-      target: 'webview'
-    })
-  })
-
-  it('creates background links without requesting keyboard focus', () => {
+  it('creates modifier-click links in the background', () => {
     storeState.value = {
       browserPagesByWorkspace: {
         'workspace-1': [{ id: 'page-1', workspaceId: 'workspace-1', worktreeId: 'worktree-1' }]
@@ -168,6 +140,32 @@ describe('link-opened Orca tabs', () => {
       'https://docs.example.com/background',
       expect.objectContaining({ activate: false })
     )
-    expect(requestBrowserFocusMock).not.toHaveBeenCalled()
   })
+
+  // Why: #18832 — focus left on the opener made Cmd/Ctrl+W close the opener instead.
+  it.each([true, undefined])(
+    'focuses foreground links with activate=%s but not background links',
+    (activate) => {
+      storeState.value = {
+        browserPagesByWorkspace: {
+          'workspace-1': [{ id: 'page-1', workspaceId: 'workspace-1', worktreeId: 'worktree-1' }]
+        },
+        browserTabsByWorktree: {},
+        createBrowserTab: createBrowserTabMock
+      }
+      const handler = captureOpenLinkHandler()
+
+      handler({
+        browserPageId: 'page-1',
+        url: 'https://docs.example.com/background',
+        activate: false
+      })
+      expect(dispatchEventMock).not.toHaveBeenCalled()
+
+      handler({ browserPageId: 'page-1', url: 'https://docs.example.com/foreground', activate })
+      expect(dispatchEventMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ detail: { pageId: 'new-page', target: 'webview' } })
+      )
+    }
+  )
 })

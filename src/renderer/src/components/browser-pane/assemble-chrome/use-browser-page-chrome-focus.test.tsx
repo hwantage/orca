@@ -305,6 +305,68 @@ describe('useBrowserPageChromeFocus', () => {
     expect(document.activeElement).toBe(addressBar())
   })
 
+  // Why: #18832 — a link's new tab mounts before its guest attaches, so the request must outlast that.
+  it('focuses the page of a new tab once its guest attaches', () => {
+    act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+
+    const view = render(<ChromeHarness hasGuest={false} />)
+    act(() => flushFrames(20))
+    view.rerender(<ChromeHarness />)
+    act(() => flushFrames())
+
+    expect(document.activeElement).toBe(guest())
+  })
+
+  // Why: a remote link's request can arrive after the pane mounted but before its guest attached.
+  it('focuses the page when a request event lands before its guest attaches', () => {
+    const view = render(<ChromeHarness hasGuest={false} />)
+    act(() => flushFrames())
+    act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+    act(() => flushFrames(3))
+    view.rerender(<ChromeHarness />)
+    act(() => flushFrames())
+
+    expect(document.activeElement).toBe(guest())
+  })
+
+  it('leaves focus the user moves in the frame the guest attaches', () => {
+    act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+
+    const view = render(<ChromeHarness hasGuest={false} />)
+    act(() => flushFrames(1))
+    act(() => addressBar().focus())
+    view.rerender(<ChromeHarness />)
+    act(() => flushFrames())
+
+    expect(document.activeElement).toBe(addressBar())
+  })
+
+  it('drops a pending page focus when the user leaves the tab before its guest attaches', () => {
+    act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+
+    const view = render(<ChromeHarness hasGuest={false} />)
+    act(() => flushFrames(2))
+    view.rerender(<ChromeHarness hasGuest={false} isActive={false} />)
+    act(() => addressBar().focus())
+    view.rerender(<ChromeHarness />)
+    act(() => flushFrames())
+
+    expect(document.activeElement).toBe(addressBar())
+  })
+
+  it('leaves focus the user moves while the guest of a new tab attaches', () => {
+    act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
+
+    const view = render(<ChromeHarness hasGuest={false} />)
+    act(() => flushFrames(2))
+    act(() => addressBar().focus())
+    act(() => flushFrames(2))
+    view.rerender(<ChromeHarness />)
+    act(() => flushFrames())
+
+    expect(document.activeElement).toBe(addressBar())
+  })
+
   it('sends a durable palette request aimed at the page to the guest', () => {
     act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
 
@@ -355,7 +417,8 @@ describe('useBrowserPageChromeFocus', () => {
   it('retains a request for a guest that attaches after the frame retries finish', () => {
     act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
     const view = render(<ChromeHarness hasGuest={false} />)
-    act(() => flushFrames())
+    act(() => flushFrames(128))
+    expect(frameCallbacks).toHaveLength(0)
     expect(peekBrowserFocusRequest(PAGE_ID)).toBe('webview')
 
     view.rerender(<ChromeHarness />)
@@ -451,7 +514,7 @@ describe('useBrowserPageChromeFocus', () => {
   it('preserves a delayed guest request through StrictMode effect replay', () => {
     act(() => requestBrowserFocus({ pageId: PAGE_ID, target: 'webview' }))
     const view = render(<ChromeHarness hasGuest={false} />, { wrapper: StrictMode })
-    act(() => flushFrames())
+    act(() => flushFrames(128))
     expect(peekBrowserFocusRequest(PAGE_ID)).toBe('webview')
 
     view.rerender(<ChromeHarness />)

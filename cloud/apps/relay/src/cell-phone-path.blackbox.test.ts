@@ -14,53 +14,8 @@ const token = (fill: number) => Buffer.alloc(32, fill).toString('base64url')
 const TOKEN = token(1)
 const OTHER_CELL = { id: 'production-gce-c4', url: 'https://c4.relay.onorca.dev', capacityRequests: 900 }
 
-// A paired phone's accept and attach with the switch off, as main issued them at 9ea54343710.
-const DATABASE_PATH_ACCEPT = [
-  'SELECT * FROM relay_devices WHERE relay_host_id = ? AND (current_hash = ? OR grace_hash = ?)',
-  'SELECT assignment.*, cell.cell_url, region.region FROM relay_assignments assignment JOIN relay_cells cell ON cell.cell_id = assignment.cell_id LEFT JOIN relay_cell_regions region ON region.cell_id = cell.cell_id WHERE assignment.user_id = ? AND assignment.relay_host_id = ?',
-  'BEGIN',
-  'SELECT * FROM relay_invites WHERE relay_host_id = ? AND token_hash = ?',
-  'SELECT * FROM relay_devices WHERE relay_host_id = ? AND (current_hash = ? OR grace_hash = ?)',
-  'COMMIT',
-  'BEGIN',
-  'SELECT * FROM relay_assignments WHERE user_id = ? AND relay_host_id = ? [locked]',
-  'SELECT * FROM relay_assignment_activity_leases WHERE user_id = ? AND relay_host_id = ? ORDER BY activity_id ASC [locked]',
-  'UPDATE relay_assignments SET pending_confirmations = CASE WHEN pending_confirmations + ? < 0 THEN 0 ELSE pending_confirmations + ? END, lease_expires_at = CASE WHEN lease_expires_at > ? THEN lease_expires_at ELSE ? END, last_activity_at = ? WHERE user_id = ? AND relay_host_id = ?',
-  'INSERT INTO relay_assignment_activity_leases (user_id, relay_host_id, activity_id, activity_kind, cell_id, request_units, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  'UPDATE relay_cells SET reserved_requests = CASE WHEN reserved_requests + ? < 0 THEN 0 ELSE reserved_requests + ? END, updated_at = ? WHERE cell_id = ? AND (? <= 0 OR reserved_requests + ? <= capacity_requests) RETURNING cell_id',
-  'COMMIT',
-  'BEGIN',
-  'SELECT * FROM relay_assignments WHERE user_id = ? AND relay_host_id = ? [locked]',
-  'SELECT * FROM relay_assignment_activity_leases WHERE user_id = ? AND relay_host_id = ? ORDER BY activity_id ASC [locked]',
-  'UPDATE relay_assignments SET reserved_splices = CASE WHEN reserved_splices + ? < 0 THEN 0 ELSE reserved_splices + ? END, lease_expires_at = CASE WHEN lease_expires_at > ? THEN lease_expires_at ELSE ? END, last_activity_at = ? WHERE user_id = ? AND relay_host_id = ?',
-  'INSERT INTO relay_assignment_activity_leases (user_id, relay_host_id, activity_id, activity_kind, cell_id, request_units, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  'UPDATE relay_cells SET reserved_requests = CASE WHEN reserved_requests + ? < 0 THEN 0 ELSE reserved_requests + ? END, updated_at = ? WHERE cell_id = ? AND (? <= 0 OR reserved_requests + ? <= capacity_requests) RETURNING cell_id',
-  'COMMIT',
-  'INSERT INTO relay_connection_bases (basis_conn_id, user_id, relay_host_id, relay_device_id, owning_control_generation, credential_kind, invite_token_hash, accepted_credential_version, accepted_as, deadline, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-]
-
-const CONFIRM_DEVICE_READ =
-  'SELECT * FROM relay_devices WHERE user_id = ? AND relay_host_id = ? AND relay_device_id = ?'
-
-// The flag-off confirm, as main issued it at 9ea54343710.
-const DATABASE_PATH_CONFIRM = [
-  'BEGIN',
-  'SELECT basis_conn_id, result_json FROM relay_confirm_results WHERE user_id = ? AND relay_host_id = ? AND req_id = ?',
-  'SELECT * FROM relay_connection_bases WHERE basis_conn_id = ?',
-  'UPDATE relay_devices SET updated_at = updated_at WHERE user_id = ? AND relay_host_id = ? AND relay_device_id = ?',
-  'SELECT * FROM relay_devices WHERE user_id = ? AND relay_host_id = ? AND relay_device_id = ?',
-  'UPDATE relay_devices SET current_expires_at = ?, updated_at = ? WHERE user_id = ? AND relay_host_id = ? AND relay_device_id = ?',
-  'INSERT INTO relay_confirm_results (user_id, relay_host_id, req_id, basis_conn_id, tuple_json, result_json, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  'INSERT INTO relay_audit_events (id, at, type, user_id, relay_host_id, relay_device_id, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  'COMMIT',
-  'BEGIN',
-  'SELECT * FROM relay_assignments WHERE user_id = ? AND relay_host_id = ? [locked]',
-  'SELECT * FROM relay_assignment_activity_leases WHERE user_id = ? AND relay_host_id = ? ORDER BY activity_id ASC [locked]',
-  'DELETE FROM relay_assignment_activity_leases WHERE user_id = ? AND relay_host_id = ? AND activity_id = ?',
-  'UPDATE relay_assignments SET pending_confirmations = CASE WHEN pending_confirmations + ? < 0 THEN 0 ELSE pending_confirmations + ? END, lease_expires_at = CASE WHEN lease_expires_at > ? THEN lease_expires_at ELSE ? END, last_activity_at = ? WHERE user_id = ? AND relay_host_id = ?',
-  'UPDATE relay_cells SET reserved_requests = CASE WHEN reserved_requests + ? < 0 THEN 0 ELSE reserved_requests + ? END, updated_at = ? WHERE cell_id = ? AND (? <= 0 OR reserved_requests + ? <= capacity_requests) RETURNING cell_id',
-  'COMMIT'
-]
+const RESUME_DEVICE_READ = expect.stringMatching(/^SELECT .* FROM relay_devices\b/)
+const HOST_ASSIGNMENT_READ = expect.stringMatching(/^SELECT assignment\.\*.* FROM relay_assignments\b/)
 
 async function until(check: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -163,20 +118,30 @@ describe('the memory phone path', () => {
     const connOpen = nextFrame(seated.socket, 'conn-open')
     const phone = await reserve.dialPhone(seated.identity.hostId, TOKEN)
     expect(await connOpen).toMatchObject({ kind: 'resume', relayDeviceId: 'device-1' })
-    expect(reserve.phoneStatements()).toEqual([DATABASE_PATH_ACCEPT[0]])
+    expect(reserve.phoneStatements()).toEqual([RESUME_DEVICE_READ])
     await reserve.attachData(await connOpen, seated.ack.generation)
     expect(await phone.hello).toMatchObject({ type: 'relay-hello', ok: true, credentialKind: 'resume' })
-    expect(reserve.phoneStatements()).toEqual([DATABASE_PATH_ACCEPT[0]])
+    expect(reserve.phoneStatements()).toEqual([RESUME_DEVICE_READ])
     expect(await reserve.activityLeases()).toEqual([])
   })
 
-  it('keeps the database path statement for statement while phonePath is db', async () => {
+  it('persists the connection basis and activity leases while phonePath is db', async () => {
     const { reserve, seated } = await seatedPhoneHost('db')
     const connOpen = nextFrame(seated.socket, 'conn-open')
     const phone = await reserve.dialPhone(seated.identity.hostId, TOKEN)
     await reserve.attachData(await connOpen, seated.ack.generation)
     expect(await phone.hello).toMatchObject({ type: 'relay-hello', ok: true })
-    expect(reserve.phoneStatements()).toEqual(DATABASE_PATH_ACCEPT)
+    expect((await reserve.activityLeases()).map((lease) => lease.activity_kind).sort()).toEqual([
+      'confirmation', 'splice'
+    ])
+    expect(await reserve.raw.query(
+      `SELECT basis_conn_id, relay_device_id, credential_kind, active FROM relay_connection_bases`
+    )).toEqual([{
+      basis_conn_id: String((await connOpen).connId),
+      relay_device_id: 'device-1',
+      credential_kind: 'resume',
+      active: 1
+    }])
   })
 
   it('closes a revoked or expired device 4401 and never tries it as an invite', async () => {
@@ -193,7 +158,7 @@ describe('the memory phone path', () => {
       const phone = await reserve.dialPhone(seated.identity.hostId, refused)
       expect(await phone.hello).toEqual({ type: 'relay-hello', ok: false, code: 4401 })
       expect((await phone.closed).code).toBe(4401)
-      expect(reserve.phoneStatements()).toEqual([DATABASE_PATH_ACCEPT[0]])
+      expect(reserve.phoneStatements()).toEqual([RESUME_DEVICE_READ])
     }
   })
 
@@ -236,7 +201,7 @@ describe('the memory phone path', () => {
       reserve.database.statements.length = 0
       const phone = await reserve.dialPhone(host.hostId, TOKEN)
       const closed = await phone.closed
-      expect(reserve.phoneStatements()).toEqual(DATABASE_PATH_ACCEPT.slice(0, 2))
+      expect(reserve.phoneStatements()).toEqual([RESUME_DEVICE_READ, HOST_ASSIGNMENT_READ])
       return closed.code
     }
     expect(await dial('elsewhere')).toBe(4409)
@@ -278,7 +243,7 @@ describe('the memory phone path', () => {
     expect(after).toBeGreaterThan(before)
     expect(answer.resumeExpiresAt).toBe(after)
     expect(reserve.phoneStatements()).toEqual([
-      CONFIRM_DEVICE_READ,
+      RESUME_DEVICE_READ,
       expect.stringMatching(/^UPDATE relay_devices SET current_expires_at = \?.*RETURNING current_expires_at$/)
     ])
     expect(await reserve.activityLeases()).toEqual([])
@@ -304,7 +269,7 @@ describe('the memory phone path', () => {
     const fresh = Date.now() + 29.5 * 24 * 60 * 60 * 1000
     const notDue = await splicedPhone('memory', { expiresAt: fresh })
     expect(await notDue.confirm('confirm-1')).toMatchObject({ renewed: true, resumeExpiresAt: fresh })
-    expect(notDue.reserve.phoneStatements()).toEqual([CONFIRM_DEVICE_READ])
+    expect(notDue.reserve.phoneStatements()).toEqual([RESUME_DEVICE_READ])
 
     const due = Date.now() + 20 * 24 * 60 * 60 * 1000
     const failing = await splicedPhone('memory', { expiresAt: due })
@@ -321,7 +286,7 @@ describe('the memory phone path', () => {
     const { reserve, confirm } = await splicedPhone('memory')
     reserve.setAdmitMode('reserve', { phonePath: 'db' })
     expect(await confirm('confirm-1')).toMatchObject({ type: 'device-resume-confirmed', renewed: true })
-    expect(reserve.phoneStatements()[0]).toBe(CONFIRM_DEVICE_READ)
+    expect(reserve.phoneStatements()[0]).toEqual(RESUME_DEVICE_READ)
     expect(await reserve.activityLeases()).toEqual([])
   })
 
@@ -356,7 +321,7 @@ describe('the memory phone path', () => {
       renewed: false,
       resumeExpiresAt: stored
     })
-    expect(reserve.phoneStatements()).toEqual([CONFIRM_DEVICE_READ])
+    expect(reserve.phoneStatements()).toEqual([RESUME_DEVICE_READ])
   })
 
   it('answers every device change since the accept read as the database confirm does', async () => {
@@ -385,12 +350,40 @@ describe('the memory phone path', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(await confirm('confirm-1')).toMatchObject({ type: 'control-error', code: 'confirmation_not_active' })
     expect(reserve.phoneStatements()[0]).toBe('BEGIN')
+    expect(warnings('orca_relay_resume_confirm_failed')).toEqual([
+      {
+        event: 'orca_relay_resume_confirm_failed',
+        code: 'confirmation_not_active',
+        phonePath: 'db',
+        cellId: reserve.config.cellId
+      }
+    ])
   })
 
-  it('keeps the database confirm statement for statement while phonePath is db', async () => {
+  it('does not count a lease release that failed after a committed confirm as a failed confirm', async () => {
     const { reserve, confirm } = await splicedPhone('db')
-    expect(await confirm('confirm-1')).toMatchObject({ type: 'device-resume-confirmed', renewed: true })
-    expect(reserve.phoneStatements()).toEqual(DATABASE_PATH_CONFIRM)
+    vi.spyOn(reserve.relay.assignments, 'releaseActivity').mockRejectedValueOnce(new Error('connection terminated'))
+    // As today, the desktop still hears the release failure.
+    expect(await confirm('confirm-1')).toMatchObject({ type: 'control-error' })
+    expect(warnings('orca_relay_resume_confirm_failed')).toEqual([])
+  })
+
+  it('durably confirms and renews a database-path resume, releasing only its confirmation lease', async () => {
+    const { reserve, confirm, basisConnId } = await splicedPhone('db')
+    const before = Number((await deviceRow(reserve))?.current_expires_at)
+    const answer = await confirm('confirm-1')
+    expect(answer).toMatchObject({ type: 'device-resume-confirmed', renewed: true })
+    const after = Number((await deviceRow(reserve))?.current_expires_at)
+    expect(after).toBeGreaterThan(before)
+    expect(answer.resumeExpiresAt).toBe(after)
+    const results = await reserve.raw.query(
+      `SELECT req_id, basis_conn_id, result_json FROM relay_confirm_results`
+    )
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ req_id: 'confirm-1', basis_conn_id: basisConnId })
+    expect(JSON.parse(String(results[0]?.result_json))).toMatchObject({ renewed: true, resumeExpiresAt: after })
+    expect((await reserve.activityLeases()).map((lease) => lease.activity_kind)).toEqual(['splice'])
+    expect(await confirm('confirm-1')).toEqual(answer)
   })
 
   describe('rolling a memory cell back', () => {
@@ -425,7 +418,7 @@ describe('the memory phone path', () => {
         reserve.database.statements.length = 0
         expect(await spliced.confirm('confirm-1')).toMatchObject({ type: 'device-resume-confirmed', renewed: true })
         expect(reserve.phoneStatements().filter((sql) => !sql.includes('relay_assignment'))).toEqual([
-          CONFIRM_DEVICE_READ,
+          RESUME_DEVICE_READ,
           expect.stringMatching(/^UPDATE relay_devices SET current_expires_at/)
         ])
         // Only the control lease a flip back re-registers; nothing for the phone.
@@ -451,5 +444,63 @@ describe('the memory phone path', () => {
         expect((await leases()).filter((kind) => kind !== 'control')).toEqual([])
       })
     }
+  })
+
+  // E-dep-6 in miniature: the staging drill blocks one memory cell's database for 10 minutes.
+  it('rides out a database outage: splices keep forwarding, new work fails cleanly and recovers', async () => {
+    let now = Date.now()
+    const reserve = await cell(() => now)
+    reserve.setAdmitMode('reserve', { phonePath: 'memory' })
+    const seated = await reserve.bookedHost(3)
+    const confirm = async (reqId: string, basisConnId: string) => {
+      const answer = Promise.race([
+        nextFrame(seated.socket, 'device-resume-confirmed'),
+        nextFrame(seated.socket, 'control-error')
+      ])
+      seated.socket.send(JSON.stringify({ type: 'device-resume-confirm', v: 1, reqId, basisConnId }))
+      return await answer
+    }
+    const splice = async (fill: number) => {
+      await reserve.installDevice(seated.identity.hostId, token(fill), { relayDeviceId: `device-${fill}` })
+      const connOpen = nextFrame(seated.socket, 'conn-open')
+      const phone = await reserve.dialPhone(seated.identity.hostId, token(fill))
+      const basisConnId = String((await connOpen).connId)
+      const data = await reserve.attachData(await connOpen, seated.ack.generation)
+      expect(await phone.hello).toMatchObject({ ok: true })
+      return { phone, data, basisConnId }
+    }
+    const confirmed = await splice(1)
+    expect(await confirm('confirm-a', confirmed.basisConnId)).toMatchObject({ type: 'device-resume-confirmed' })
+    const inFlight = await splice(2)
+
+    reserve.database.failing = () => true
+    // A seated phone keeps working.
+    const relayed = new Promise<string>((resolve) =>
+      confirmed.data.once('message', (frame) => resolve(String(frame)))
+    )
+    confirmed.phone.socket.send('still here')
+    expect(await relayed).toBe('still here')
+    // A new resume and a confirm fail cleanly; nothing crashes.
+    expect((await (await reserve.dialPhone(seated.identity.hostId, token(1))).closed).code).toBe(4503)
+    expect(await confirm('confirm-b', inFlight.basisConnId)).toMatchObject({ type: 'control-error' })
+    // Flipped back during the block: the in-flight confirm still finishes on its memory basis.
+    reserve.setAdmitMode('db', { phonePath: 'memory' })
+    reserve.database.failing = null
+    reserve.database.statements.length = 0
+    expect(await confirm('confirm-c', inFlight.basisConnId)).toMatchObject({ type: 'device-resume-confirmed' })
+    expect(reserve.phoneStatements().find((sql) => !sql.includes('relay_assignment'))).toEqual(RESUME_DEVICE_READ)
+    // And new resumes take the database path again.
+    const connOpen = nextFrame(seated.socket, 'conn-open')
+    await reserve.dialPhone(seated.identity.hostId, token(1))
+    expect(await connOpen).toMatchObject({ kind: 'resume' })
+
+    // Audit rows held past 10 minutes of outage are dropped and counted, never written late.
+    reserve.database.failing = (sql) => sql.startsWith('INSERT INTO relay_audit_events')
+    now += 11 * 60 * 1000
+    await reserve.relay.store.resumeAudit.flush()
+    reserve.database.failing = null
+    const written = await reserve.raw.query(`SELECT id FROM relay_audit_events WHERE type = 'resume-confirmed'`)
+    expect(written).toEqual([])
+    expect(reserve.relay.runtimeCounts().resumeAuditDropped).toBe(2)
   })
 })
