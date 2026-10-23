@@ -300,7 +300,13 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
         </span>
         {model && (
           <span
-            className="max-w-24 shrink-0 truncate font-mono text-[10px] text-muted-foreground/70"
+            className={cn(
+              'max-w-24',
+              sendTargetStatus === 'eligible' || sendTargetStatus === 'sending'
+                ? 'min-w-0 flex-1'
+                : 'shrink-0',
+              'truncate font-mono text-[10px] text-muted-foreground/70'
+            )}
             title={model}
           >
             {model}
