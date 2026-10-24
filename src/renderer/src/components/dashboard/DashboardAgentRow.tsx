@@ -301,11 +301,12 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
         {model && (
           <span
             className={cn(
-              'max-w-24 truncate font-mono text-[10px] text-muted-foreground/70',
+              'max-w-24',
               // Why: only shrink when the in-flow Send button would otherwise overflow the row.
               sendTargetStatus === 'eligible' || sendTargetStatus === 'sending'
                 ? 'min-w-0'
-                : 'shrink-0'
+                : 'shrink-0',
+              'truncate font-mono text-[10px] text-muted-foreground/70'
             )}
             title={model}
           >
