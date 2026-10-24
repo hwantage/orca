@@ -11,6 +11,7 @@ import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 import { registerAstroLanguage } from './monaco-languages/register-astro'
 import { registerJsonlLanguage } from './monaco-languages/register-jsonl'
 import { registerJspLanguage } from './monaco-languages/register-jsp'
+import { registerLeanLanguage } from './monaco-languages/register-lean'
 import { registerNimLanguage } from './monaco-languages/register-nim'
 import { registerQuartoLanguage } from './monaco-languages/register-quarto'
 import { registerShellMarkdownAliases } from './monaco-languages/register-shell-markdown-aliases'
@@ -86,6 +87,7 @@ runMonacoSetupSteps([
   ['Svelte language registration', () => registerSvelteLanguage(monaco)],
   ['Astro language registration', () => registerAstroLanguage(monaco)],
   ['Nim language registration', () => registerNimLanguage(monaco)],
+  ['Lean language registration', () => registerLeanLanguage(monaco)],
   ['Typst language registration', () => registerTypstLanguage(monaco)],
   ['JSONL language registration', () => registerJsonlLanguage(monaco)],
   ['Quarto language registration', () => registerQuartoLanguage(monaco)],
