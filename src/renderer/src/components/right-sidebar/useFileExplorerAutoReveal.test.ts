@@ -4,8 +4,11 @@ import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useFileExplorerAutoReveal } from './useFileExplorerAutoReveal'
 import type { OpenFile } from '@/store/slices/editor'
-import type { Virtualizer } from '@tanstack/react-virtual'
-import type { FileExplorerRowProjection } from './file-explorer-row-projection'
+import { Virtualizer } from '@tanstack/react-virtual'
+import {
+  createFileExplorerRowProjection,
+  type FileExplorerRowProjection
+} from './file-explorer-row-projection'
 
 const { mockSetState } = vi.hoisted(() => ({
   mockSetState: vi.fn()
@@ -19,9 +22,23 @@ vi.mock('@/store', () => ({
 
 function mockProjection(hasPathResult = false, indexResult = 0): FileExplorerRowProjection {
   return {
+    ...createFileExplorerRowProjection([]),
     hasPath: vi.fn().mockReturnValue(hasPathResult),
     getIndexByPath: vi.fn().mockReturnValue(indexResult)
-  } as unknown as FileExplorerRowProjection
+  }
+}
+
+function mockVirtualizer(scrollToIndex = vi.fn()): Virtualizer<HTMLDivElement, Element> {
+  const virtualizer = new Virtualizer<HTMLDivElement, Element>({
+    count: 0,
+    getScrollElement: () => null,
+    estimateSize: () => 24,
+    scrollToFn: vi.fn(),
+    observeElementRect: vi.fn(),
+    observeElementOffset: vi.fn()
+  })
+  virtualizer.scrollToIndex = scrollToIndex
+  return virtualizer
 }
 
 describe('useFileExplorerAutoReveal', () => {
@@ -30,7 +47,7 @@ describe('useFileExplorerAutoReveal', () => {
     worktreePath: '/repo/wt',
     pendingExplorerReveal: null,
     setSelectedPath: vi.fn(),
-    virtualizer: { scrollToIndex: vi.fn() } as unknown as Virtualizer<HTMLDivElement, Element>
+    virtualizer: mockVirtualizer()
   }
 
   beforeEach(() => {
@@ -237,7 +254,7 @@ describe('useFileExplorerAutoReveal', () => {
         openFiles,
         rowProjection: projection,
         setSelectedPath,
-        virtualizer: { scrollToIndex } as unknown as Virtualizer<HTMLDivElement, Element>
+        virtualizer: mockVirtualizer(scrollToIndex)
       })
     )
 
