@@ -49,8 +49,6 @@ export function useMobileTasksGithubReplyMergeActions(model: GithubCheckFileActi
       setMutatingStatus(true)
       setError('')
       try {
-        // The same predicate as before, but as the anchor it selects: `commentId` and `line` are
-        // numbers only inside it, which the boolean it used to be could not carry to the send.
         const reviewAnchor =
           item.source.type === 'pr' &&
           comment.path &&
@@ -58,8 +56,6 @@ export function useMobileTasksGithubReplyMergeActions(model: GithubCheckFileActi
           typeof comment.id === 'number'
             ? { path: comment.path, line: comment.line, commentId: comment.id }
             : null
-        // A review reply and a plain issue comment are different methods, so each arm sends its
-        // own operation rather than one call picking a method string.
         const replyResult = reviewAnchor
           ? githubReviewCommentReplyWrite.interpret(
               await githubReviewCommentReplyWrite.request(
@@ -88,16 +84,10 @@ export function useMobileTasksGithubReplyMergeActions(model: GithubCheckFileActi
                 { timeoutMs: 30_000 }
               )
             )
-        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Preserve the established response shape at this boundary.
-        const envelope = replyResult as {
-          ok?: boolean
-          error?: string
-          comment?: DetailComment
+        if (replyResult.ok === false) {
+          throw new Error(replyResult.error ?? 'Failed to reply')
         }
-        if (envelope.ok === false) {
-          throw new Error(envelope.error ?? 'Failed to reply')
-        }
-        const reply: DetailComment = envelope.comment ?? {
+        const reply: DetailComment = replyResult.comment ?? {
           id: `local-${Date.now()}`,
           body,
           createdAt: new Date().toISOString(),
@@ -171,10 +161,8 @@ export function useMobileTasksGithubReplyMergeActions(model: GithubCheckFileActi
                   { timeoutMs: 60_000 }
                 )
               )
-        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Preserve the established response shape at this boundary.
-        const result = merged as { ok?: boolean; error?: string }
-        if (result.ok === false) {
-          throw new Error(result.error ?? 'Failed to merge')
+        if (merged.ok === false) {
+          throw new Error(merged.error ?? 'Failed to merge')
         }
         setActionItem(null)
         await loadTasks({ silent: true })

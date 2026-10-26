@@ -1,38 +1,26 @@
 import { bindDeferredRpcOperation, defineRpcOperation } from '../transport/rpc-operation'
-import { rpcUncheckedPayloadReader } from '../transport/rpc-reader-payload'
+import { rpcResultVariant } from '../transport/rpc-operation-result-reader'
+import { fileDirectoryEntriesSchema, legacyFileListSchema } from './file-explorer-reply-schema'
 
-/**
- * The Files tab's directory read and the capped list it falls back to.
- *
- * Both skip rather than throw, because neither refusal is an error the operation decides: the
- * `files.readDir` refusal is what selects the fallback (a desktop predating the mobile allowlist
- * answers `method_not_found`), and the `files.list` refusal supplies the message the screen shows.
- * No acceptance policy exposes a refusal code, so the panel reads the envelope's own error the way
- * `mobile-file-preview-operations.ts` does, and only these two consumers want one.
- */
+// Skip refusals so readDir can select the older-host fallback and files.list can supply display copy; the panel needs the raw refusal code.
+// Malformed accepted listings throw into the panel’s inline load error instead of crashing a later tree render.
 export const fileDirectoryRead = bindDeferredRpcOperation(
   defineRpcOperation({
     name: 'files.read-directory-or-skip',
     method: 'files.readDir',
     acceptance: 'success-result-or-skip',
     barrier: 'after-caller-barrier',
-    read: rpcUncheckedPayloadReader('directory-entries')
+    read: rpcResultVariant('directory-entries', fileDirectoryEntriesSchema)
   })
 )
 
-/**
- * The legacy capped list. A second reader on `files.list`: the native-chat inventory's
- * `files.list-or-skip` reads the `files` member alone, and the explorer also needs `truncated` to
- * keep the "Showing first 5000" note. Widening that one to a payload reader would split the
- * `workspace-files` variant it shares with `files.searchPaths`, whose caller feeds both through one
- * `extractPaths`, and only move the member read into that hook — so the explorer declares its own.
- */
+// Use a separate files.list reader: the explorer needs truncated as well as files; native-chat inventory shares a files-only projection with searchPaths.
 export const legacyFileListRead = bindDeferredRpcOperation(
   defineRpcOperation({
     name: 'files.legacy-explorer-list-or-skip',
     method: 'files.list',
     acceptance: 'success-result-or-skip',
     barrier: 'after-caller-barrier',
-    read: rpcUncheckedPayloadReader('legacy-file-list')
+    read: rpcResultVariant('legacy-file-list', legacyFileListSchema)
   })
 )

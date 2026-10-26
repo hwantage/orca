@@ -9,11 +9,10 @@ import {
 } from './notification-delivery-preferences'
 import type {
   MobilePushFilter,
-  MobilePushRegisterInput,
-  MobilePushRegisterResult
+  MobilePushRegisterInput
 } from '../../../src/shared/mobile-push-contract'
 import { NOTIFICATIONS_REMOTE_PUSH_RUNTIME_CAPABILITY } from '../../../src/shared/protocol-version'
-import type { RpcClient } from '../transport/rpc-client'
+import type { RpcOperationSender } from '../transport/rpc-operation-sender'
 import { startRuntimeCapabilityProbe } from '../transport/runtime-capability-probe'
 import { pushRouteRegister, pushRouteUnregister } from './mobile-push-registration-operations'
 import {
@@ -26,7 +25,7 @@ import { addPushTokenListener, getDevicePushToken, type MobilePushToken } from '
 
 export const NOTIFICATIONS_REMOTE_PUSH_CAPABILITY = NOTIFICATIONS_REMOTE_PUSH_RUNTIME_CAPABILITY
 
-type PushClient = RpcClient
+type PushClient = RpcOperationSender
 
 const REQUEST_TIMEOUT_MS = 5_000
 const REMOVAL_TIMEOUT_MS = 2_000
@@ -115,8 +114,7 @@ async function sendRegister(
   if (!registration?.accepted) {
     return false
   }
-  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Preserve the established response shape at this boundary.
-  return (registration.value as MobilePushRegisterResult | null)?.registered === true
+  return registration.value?.registered === true
 }
 
 async function sendUnregister(client: PushClient, timeoutMs: number): Promise<boolean> {
@@ -220,11 +218,7 @@ async function reconcileAllHosts(): Promise<void> {
   await Promise.all([...hostsById.keys()].map((hostId) => enqueueReconcile(hostId)))
 }
 
-/**
- * Track a host whose client has reached `connected`, registering (or retrying a
- * pending unregister) as the current preference requires. The returned function
- * detaches the client on disconnect; the host's tracked state survives it.
- */
+// Keep tracked host intent across disconnects; this disposer detaches only its current connected client.
 export function attachPushRegistration(hostId: string, client: PushClient): () => void {
   const state = hostState(hostId)
   if (state.connection.client !== client) {
@@ -304,7 +298,7 @@ export async function unregisterPushForRemovedHost(hostId: string): Promise<() =
   }
 }
 
-/** A rolled token stops delivering, so re-register every connected host at once. */
+// Provider token rollover invalidates delivery, so refresh every connected host immediately.
 export function startPushTokenSync(): () => void {
   const stopLease = startMobilePushLeaseRenewal(reconcileAllHosts)
   const stopToken = addPushTokenListener((token) => {

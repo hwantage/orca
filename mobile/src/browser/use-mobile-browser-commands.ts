@@ -1,5 +1,6 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from 'react'
 import type { RpcClient } from '../transport/rpc-client'
+import { isRpcDeliveryUnknown } from '../transport/rpc-delivery-ambiguity'
 import type { BrowserScreencastFrameMetadata } from '../transport/browser-screencast-protocol'
 import {
   browserDialogAccept,
@@ -14,6 +15,7 @@ import {
 } from './mobile-browser-command-operations'
 import type { BrowserPageCommandSend, BrowserPageParams } from './use-mobile-browser-request'
 import {
+  browserWheelDeltaFromScreen,
   computeBrowserFrameGeometry,
   computeBrowserTouchClickRadiusCss,
   mapScreenToBrowserPoint,
@@ -22,6 +24,7 @@ import {
   type BrowserZoomState
 } from './browser-touch-geometry'
 import type { BrowserPointerModifier } from './MobileBrowserPointerModifiers'
+import type { BrowserDialogState } from './mobile-browser-stream-events'
 
 const TOUCH_CLICK_RADIUS_DIP = 14
 type PendingWheelCommand = {
@@ -45,7 +48,7 @@ type MobileBrowserCommandArgs = {
   pageParams: () => BrowserPageParams | null
   pointerModifiers: BrowserPointerModifier[]
   sendBrowserRequest: SendBrowserRequest
-  setDialog: Dispatch<SetStateAction<{ dialogType: string; message: string } | null>>
+  setDialog: Dispatch<SetStateAction<BrowserDialogState | null>>
   setError: Dispatch<SetStateAction<string | null>>
   setKeyboardValue: Dispatch<SetStateAction<string>>
   setPointerModifiers: Dispatch<SetStateAction<BrowserPointerModifier[]>>
@@ -70,6 +73,7 @@ export function useMobileBrowserCommands(args: MobileBrowserCommandArgs) {
   } = args
 
   const pendingWheelCommandRef = useRef<PendingWheelCommand | null>(null)
+  const dialogAnswerTokenRef = useRef(0)
 
   const wheelCommandInFlightRef = useRef(false)
 
@@ -99,8 +103,7 @@ export function useMobileBrowserCommands(args: MobileBrowserCommandArgs) {
         browserPointerWheel.interpret(wheelReply)
         setError(null)
       } catch {
-        // Scroll bursts commonly race page reload/navigation. Avoid replacing
-        // the live browser with transient command errors like selector_not_found.
+        // Scroll bursts race navigation; keep usable stream instead of replacing it with transient selector errors.
       } finally {
         wheelCommandInFlightRef.current = false
         flushPendingWheelCommand()
@@ -114,35 +117,37 @@ export function useMobileBrowserCommands(args: MobileBrowserCommandArgs) {
       if (!client || !base) {
         return
       }
-      const clickResult = await sendBrowserRequest(
-        async (rpc, page, options) =>
-          browserPointerClick.interpret(
-            await browserPointerClick.request(
-              rpc,
-              {
-                ...page,
-                x: point.x,
-                y: point.y,
-                button,
-                modifiers: pointerModifiers,
-                ...(button === 'left'
-                  ? {
-                      radius: computeBrowserTouchClickRadiusCss(
-                        layoutRef.current,
-                        frameMetadataRef.current,
-                        zoomRef.current,
-                        TOUCH_CLICK_RADIUS_DIP
-                      )
-                    }
-                  : {})
-              },
-              options
-            )
-          ),
-        { suppressError: true, timeoutMs: 5_000 }
-      )
-      if (clickResult !== null || pointerModifiers.length > 0) {
+      try {
+        browserPointerClick.interpret(
+          await browserPointerClick.request(
+            client,
+            {
+              ...base,
+              x: point.x,
+              y: point.y,
+              button,
+              modifiers: pointerModifiers,
+              ...(button === 'left'
+                ? {
+                    radius: computeBrowserTouchClickRadiusCss(
+                      layoutRef.current,
+                      frameMetadataRef.current,
+                      zoomRef.current,
+                      TOUCH_CLICK_RADIUS_DIP
+                    )
+                  }
+                : {})
+            },
+            { timeoutMs: 5_000 }
+          )
+        )
+        setError(null)
         return
+      } catch (error) {
+        // Why: a timed-out click may still run on the host, and the move/down/up replay drops modifiers.
+        if (isRpcDeliveryUnknown(error) || pointerModifiers.length > 0) {
+          return
+        }
       }
       try {
         const moveReply = await browserPointerMove.request(client, {
@@ -157,11 +162,10 @@ export function useMobileBrowserCommands(args: MobileBrowserCommandArgs) {
         browserPointerUp.interpret(upReply)
         setError(null)
       } catch {
-        // Pointer commands can race page navigation. Keep the stream visible;
-        // actionable failures still surface through navigation/stream errors.
+        // Pointer sends race navigation; keep stream and surface actionable failures through navigation/stream paths.
       }
     },
-    [client, pageParams, pointerModifiers, sendBrowserRequest]
+    [client, pageParams, pointerModifiers]
   )
 
   const togglePointerModifier = useCallback((modifier: BrowserPointerModifier) => {
@@ -178,13 +182,8 @@ export function useMobileBrowserCommands(args: MobileBrowserCommandArgs) {
       if (!client || !base) {
         return
       }
-      const currentLayout = layoutRef.current
-      const geometry = computeBrowserFrameGeometry(currentLayout, frameMetadataRef.current)
-      const localZoom = zoomRef.current.scale
-      const scale = (geometry?.scale ?? 1) * localZoom
-      const cssDx = screenDx / scale
-      const cssDy = screenDy / scale
-      const delta = { dx: Math.round(-cssDx), dy: Math.round(-cssDy) }
+      const geometry = computeBrowserFrameGeometry(layoutRef.current, frameMetadataRef.current)
+      const delta = browserWheelDeltaFromScreen(screenDx, screenDy, geometry, zoomRef.current.scale)
       if (Math.abs(delta.dx) < 1 && Math.abs(delta.dy) < 1) {
         return
       }
@@ -245,13 +244,28 @@ export function useMobileBrowserCommands(args: MobileBrowserCommandArgs) {
     [sendBrowserRequest]
   )
 
+  // Card represents page’s actual block; only host dialogClosed proves answer applied, not button press.
   const sendDialogCommand = useCallback(
     async (method: 'browser.dialogAccept' | 'browser.dialogDismiss') => {
-      setDialog(null)
       const command = method === 'browser.dialogAccept' ? browserDialogAccept : browserDialogDismiss
-      await sendBrowserRequest(
+      // Token binds answer to current dialog and disables duplicate taps; stale replies cannot mutate next card.
+      const token = (dialogAnswerTokenRef.current += 1)
+      setDialog((current) =>
+        current === null ? null : { ...current, error: undefined, pending: token }
+      )
+      const result = await sendBrowserRequest(
         async (rpc, page, options) => command.interpret(await command.request(rpc, page, options)),
         { suppressError: true, timeoutMs: 5_000 }
+      )
+      // Refusal/timeout leaves page blocked, so retain card with error explanation.
+      setDialog((current) =>
+        current === null || current.pending !== token
+          ? current
+          : {
+              ...current,
+              pending: undefined,
+              ...(result === null ? { error: 'That answer did not reach the page.' } : {})
+            }
       )
     },
     [sendBrowserRequest]

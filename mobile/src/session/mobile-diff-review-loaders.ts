@@ -13,7 +13,7 @@ import {
   reviewFileDiffRead,
   reviewWorktreeMetadataRead
 } from './mobile-diff-review-operations'
-import type { MobileReviewGitDiffResult } from './mobile-diff-review-rpc'
+import type { MobileReviewGitDiffResult } from './diff-review-reply-schema'
 import {
   canOpenMobileBranchCompareDiff,
   type MobileGitBranchCompareResult
@@ -40,10 +40,9 @@ type DiffLoadInput = {
   branchCompare: MobileGitBranchCompareResult | null
 }
 
-/** One settled file diff and the operation that reads it; the two methods share a reader. */
 type PendingFileDiff = {
   reply: RpcResponse
-  interpret: (reply: RpcResponse) => MobileReviewGitDiffResult | null
+  interpret: (reply: RpcResponse) => MobileReviewGitDiffResult
 }
 
 export async function loadMobileDiffReviewBranchCompare(
@@ -59,23 +58,18 @@ export async function loadMobileDiffReviewBranchCompare(
       worktree: `id:${worktreeId}`,
       baseRef
     })
-    // Why the raw refusal: a host that does not offer git to mobile is a capability gap this
-    // screen degrades on, and no acceptance policy carries the code and message through.
+    // Inspect raw refusal to degrade capability gaps; acceptance policies do not carry code/message.
     if (!reply.ok && isMobileGitUnavailable(reply.error?.code, reply.error?.message)) {
       return { result: null }
     }
-    let parsed: MobileGitBranchCompareResult | null
     try {
-      parsed = reviewBranchCompareRead.interpret(reply)
+      return { result: reviewBranchCompareRead.interpret(reply) }
     } catch (error) {
       return {
         result: null,
         error: refusedRpcMessageOrFallback(error, 'Committed changes unavailable')
       }
     }
-    return parsed
-      ? { result: parsed }
-      : { result: null, error: 'Committed changes response was invalid' }
   } catch (err) {
     // A transport drop surfaces its own message verbatim; only a refusal falls back above.
     return { result: null, error: err instanceof Error ? err.message : 'Committed changes failed' }
@@ -105,8 +99,7 @@ export async function loadMobileDiffReviewSnapshot(
     throw new Error('Source control response was invalid')
   }
 
-  // Both legs are interpreted after the barrier, not as each lands: a refused worktree.show must
-  // not decide the error before the compare leg has had its own chance to fail.
+  // Interpret after both reads settle so worktree refusal cannot preempt the compare failure.
   const [branch, worktreeReply] = await Promise.all([
     loadMobileDiffReviewBranchCompare(client, worktreeId),
     reviewWorktreeMetadataRead.request(client, { worktree: `id:${worktreeId}` })
@@ -155,8 +148,7 @@ export async function loadMobileDiffReviewDiff(input: DiffLoadInput): Promise<Re
       ? await requestBranchFileDiff(client, worktreeId, item, branchCompare)
       : await requestWorktreeFileDiff(client, worktreeId, item)
   if (!pending.reply.ok) {
-    // Why the raw refusal: `diff_too_large` is a render mode rather than a failure, and no
-    // acceptance policy carries the code through.
+    // Read the raw code because diff_too_large selects a render mode rather than a failure.
     if (pending.reply.error?.code === 'diff_too_large') {
       return { kind: 'too-large', itemKey: item.key }
     }
@@ -164,14 +156,11 @@ export async function loadMobileDiffReviewDiff(input: DiffLoadInput): Promise<Re
       return { kind: 'deleted', itemKey: item.key }
     }
   }
-  let result: MobileReviewGitDiffResult | null
+  let result: MobileReviewGitDiffResult
   try {
     result = pending.interpret(pending.reply)
   } catch (error) {
     throw new Error(refusedRpcMessageOrFallback(error, 'Unable to load diff'))
-  }
-  if (!result) {
-    throw new Error('Diff response was invalid')
   }
   if (result.kind === 'binary') {
     return { kind: 'binary', itemKey: item.key }

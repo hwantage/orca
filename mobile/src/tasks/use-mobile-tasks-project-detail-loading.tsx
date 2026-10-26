@@ -1,11 +1,6 @@
 import type { ItemDetailLoadingModel } from './use-mobile-tasks-item-detail-loading'
 import { useEffect } from './mobile-tasks-dependencies'
 import {
-  type DetailComment,
-  type GitHubAssignableUser,
-  type GitHubDetailCheck,
-  type GitHubDetailFile,
-  type GitHubPRReviewSummary,
   editableProjectFields,
   projectFieldDraftValue,
   projectRowType,
@@ -102,39 +97,11 @@ export function useMobileTasksProjectDetailLoading(model: ItemDetailLoadingModel
         if (stale) {
           return
         }
-        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Preserve the established response shape at this boundary.
-        const result = githubProjectRowDetailRead.interpret(response) as
-          | {
-              ok: true
-              details: {
-                body?: string
-                comments?: DetailComment[]
-                item?: {
-                  labels?: string[]
-                  reviewDecision?: string | null
-                  reviewRequests?: GitHubAssignableUser[]
-                  latestReviews?: GitHubPRReviewSummary[]
-                }
-                assignees?: string[]
-                headSha?: string
-                baseSha?: string
-                pullRequestId?: string
-                checks?: GitHubDetailCheck[]
-                files?: Array<{
-                  path: string
-                  oldPath?: string
-                  status?: GitHubDetailFile['status']
-                  additions?: number
-                  deletions?: number
-                  isBinary?: boolean
-                  viewerViewedState?: 'DISMISSED' | 'VIEWED' | 'UNVIEWED'
-                }>
-              }
-            }
-          | { ok: false; error: { message: string } }
+        const result = githubProjectRowDetailRead.interpret(response)
         if (!result.ok) {
           throw new Error(result.error.message)
         }
+        // Forward reviewDecision unchanged: null and absence represent distinct review states.
         setProjectRowDetail({
           provider: 'github',
           body: result.details.body ?? '',

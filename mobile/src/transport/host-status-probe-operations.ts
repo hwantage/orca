@@ -1,26 +1,47 @@
 import { bindDeferredRpcOperation, defineRpcOperation } from './rpc-operation'
-import { rpcUncheckedPayloadReader } from './rpc-reader-payload'
+import { rpcResultVariant } from './rpc-operation-result-reader'
+import { hostStatusSchema, type HostStatusReply } from './host-status-reply-schema'
+import type { RpcResponse } from './types'
 
-/**
- * `status.get` as the transport itself asks it: the protocol gate's capability read, the retrying
- * runtime capability probe, and the pairing race's "does this path answer at all".
- *
- * The third named policy on this method, and the second `success-result-or-skip` one. All three
- * transport callers agree that a refusal is an absent answer rather than an error — the gate falls
- * back to closed gates, the probe backs off and re-asks, the race counts the candidate as failed —
- * so they share one operation. It stays separate from the Tasks screen's two (`status.task-runtime`
- * surfaces the host's message, `status.create-capabilities-or-skip` is the create drawer's) because
- * an operation name is what a decode failure reports, and because transport must not import tasks.
- *
- * One reader, unchecked, because no caller reads the same field: the gate casts the whole status,
- * the probe re-checks `capabilities` is an array of strings itself, and the race discards it.
- */
+// Transport callers share refusal-as-no-answer policy but differ in fallback/retry consequences; keep this boundary independent of tasks.
+// Readers below catch decode errors because throws in fulfillment callbacks would become detached rejections and strand probe/race state.
 export const hostStatusProbe = bindDeferredRpcOperation(
   defineRpcOperation({
     name: 'status.transport-probe-or-skip',
     method: 'status.get',
     acceptance: 'success-result-or-skip',
     barrier: 'after-caller-barrier',
-    read: rpcUncheckedPayloadReader('host-status')
+    read: rpcResultVariant('host-status', hostStatusSchema)
   })
 )
+
+// Return null for refusal, but {status:null} for unreadable success to preserve the probe’s stop-versus-backoff behavior.
+export function readProbedHostStatus(
+  reply: RpcResponse
+): { status: HostStatusReply | null } | null {
+  try {
+    const accepted = hostStatusProbe.interpret(reply)
+    return accepted.accepted ? { status: accepted.value } : null
+  } catch {
+    return { status: null }
+  }
+}
+
+export function readProbedHostCapabilities(reply: RpcResponse): readonly string[] | null {
+  const landed = readProbedHostStatus(reply)
+  return landed ? (landed.status?.capabilities ?? []) : null
+}
+
+// An unreadable successful reply still proves the candidate socket answered; only refusal means the path failed.
+export function hostAnsweredStatusProbe(reply: RpcResponse): boolean {
+  try {
+    return hostStatusProbe.interpret(reply).accepted
+  } catch {
+    return true
+  }
+}
+
+// Never throw in the race’s fulfillment handler; unreadable answers carry null status rather than stranding the candidate.
+export function readPairingCandidateStatus(reply: RpcResponse): HostStatusReply | null {
+  return readProbedHostStatus(reply)?.status ?? null
+}

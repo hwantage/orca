@@ -1,15 +1,16 @@
 import { bindDeferredRpcOperation, defineRpcOperation } from '../transport/rpc-operation'
+import { rpcResultVariant } from '../transport/rpc-operation-result-reader'
 import {
-  rpcUncheckedMemberReader,
-  rpcUncheckedPayloadReader
-} from '../transport/rpc-reader-payload'
+  detectedAgentIdsSchema,
+  repoBaseRefSearchSchema,
+  repoSetupHooksSchema,
+  repoSparsePresetListSchema,
+  repoSparsePresetSaveSchema,
+  sshConnectionStateSchema
+} from './workspace-source-reply-schema'
 
-// The repo and SSH reads the workspace-create drawer runs: connection state, agent detection,
-// repo-owned setup hooks, sparse presets and base-branch search.
+const sshConnectionStateReader = rpcResultVariant('ssh-connection-state', sshConnectionStateSchema)
 
-const sshConnectionStateReader = rpcUncheckedMemberReader('ssh-connection-state', 'state')
-
-/** Connecting an SSH repo before create. The reply's only read field is `state`. */
 export const sshRepoConnectRun = bindDeferredRpcOperation(
   defineRpcOperation({
     name: 'ssh.connect-repo',
@@ -20,7 +21,6 @@ export const sshRepoConnectRun = bindDeferredRpcOperation(
   })
 )
 
-/** The same field, read by the drawer's state effect and by the pre-create readiness check. */
 export const sshRepoStateRead = bindDeferredRpcOperation(
   defineRpcOperation({
     name: 'ssh.repo-state',
@@ -31,37 +31,34 @@ export const sshRepoStateRead = bindDeferredRpcOperation(
   })
 )
 
-// Agent detection is advisory: a refused or failed probe leaves the drawer with an empty set and
-// the runtime still validates availability before spawning, so refusal is a skip.
+// Agent detection is advisory; the runtime validates availability again before spawning.
 export const remoteAgentDetectionRead = bindDeferredRpcOperation(
   defineRpcOperation({
     name: 'preflight.detect-remote-agents-or-skip',
     method: 'preflight.detectRemoteAgents',
     acceptance: 'success-result-or-skip',
     barrier: 'after-caller-barrier',
-    read: rpcUncheckedPayloadReader('detected-agent-ids')
+    read: rpcResultVariant('detected-agent-ids', detectedAgentIdsSchema)
   })
 )
 
-/** The local host's agents, for a repo with no SSH connection. */
 export const localAgentDetectionRead = bindDeferredRpcOperation(
   defineRpcOperation({
     name: 'preflight.detect-agents-or-skip',
     method: 'preflight.detectAgents',
     acceptance: 'success-result-or-skip',
     barrier: 'after-caller-barrier',
-    read: rpcUncheckedPayloadReader('detected-agent-ids')
+    read: rpcResultVariant('detected-agent-ids', detectedAgentIdsSchema)
   })
 )
 
-/** The repo's orca.yaml hooks, which decide whether create must ask before running setup. */
 export const repoSetupHooksRead = bindDeferredRpcOperation(
   defineRpcOperation({
     name: 'repo.setup-hooks',
     method: 'repo.hooks',
     acceptance: 'require-result-or-throw-message',
     barrier: 'after-caller-barrier',
-    read: rpcUncheckedPayloadReader('repo-hooks')
+    read: rpcResultVariant('repo-hooks', repoSetupHooksSchema)
   })
 )
 
@@ -71,7 +68,7 @@ export const repoSparsePresetListRead = bindDeferredRpcOperation(
     method: 'repo.sparsePresets',
     acceptance: 'require-result-or-throw-message',
     barrier: 'after-caller-barrier',
-    read: rpcUncheckedMemberReader('sparse-presets', 'presets')
+    read: rpcResultVariant('sparse-presets', repoSparsePresetListSchema)
   })
 )
 
@@ -81,21 +78,17 @@ export const repoSparsePresetSaveRun = bindDeferredRpcOperation(
     method: 'repo.saveSparsePreset',
     acceptance: 'require-result-or-throw-message',
     barrier: 'after-caller-barrier',
-    read: rpcUncheckedMemberReader('saved-sparse-preset', 'preset')
+    read: rpcResultVariant('saved-sparse-preset', repoSparsePresetSaveSchema)
   })
 )
 
-/**
- * Base-branch search. The payload is unchecked: both callers — the drawer's picker effect and the
- * Smart source picker — spell their own `refDetails ?? refs.map(...)` fallback, and reproducing
- * that in the reader would need a type assertion the operation fence rightly bans.
- */
+// Callers retain their refDetails-or-refs fallback; neither member is required for older hosts.
 export const repoBaseRefSearchRead = bindDeferredRpcOperation(
   defineRpcOperation({
     name: 'repo.base-ref-search',
     method: 'repo.searchRefs',
     acceptance: 'require-result-or-throw-message',
     barrier: 'after-caller-barrier',
-    read: rpcUncheckedPayloadReader('base-ref-search')
+    read: rpcResultVariant('base-ref-search', repoBaseRefSearchSchema)
   })
 )

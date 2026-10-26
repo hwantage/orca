@@ -4,11 +4,7 @@ import {
   type RequestScope
 } from './generation-scoped-request-owner'
 
-// Why this file exists: the owner's claim is that a caller cannot publish into it except through a
-// lease it issued, in the generation it issued it. Every expect-error directive below is that claim
-// as an assertion — tsc fails on a directive that stops catching an error, so
-// `pnpm --dir mobile typecheck` is the gate. `mobile/tsconfig.json` excludes tests, so a type-level
-// assertion written in one is checked by nothing; that is why these live here. Nothing here runs.
+// Keep lease compile fences outside tests because mobile typechecking excludes them; unused expect-error directives fail the gate.
 
 type FileParameters = { readonly query: string }
 
@@ -55,6 +51,17 @@ export function fenceLoaderOnlyReturns(): void {
   // @ts-expect-error the loader publishes by returning the owner's value, not some other type
   void paths.load(scope, { query: 'a' }, async () => 'not-a-path-list')
   void paths.load(scope, { query: 'a' }, async () => null)
+  void paths.load(scope, { query: 'a' }, async (currency) => (currency.isCurrent() ? ['a'] : null))
+}
+
+export function fenceCurrencyIsAProbeNotALease(): void {
+  void paths.load(scope, { query: 'a' }, async (currency) => {
+    // @ts-expect-error the probe answers currency and is not the lease, so it cannot publish
+    paths.commit(currency, ['a'])
+    // @ts-expect-error the probe exposes no generation at all, so there is no member to read
+    void currency.generation
+    return null
+  })
 }
 
 // @ts-expect-error the lease carries its generation privately; a caller cannot read or compare it

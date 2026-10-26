@@ -29,12 +29,16 @@ export function aiVaultSearchHitToSession(
     queuedMessageCount: 0,
     subagentTranscriptCount: 0,
     resumeCommand: hit.resumeCommand ?? '',
-    subagent: null
+    subagent: null,
+    ...(hit.structuredSession ? { structuredSession: hit.structuredSession } : {})
   }
 }
 
 export function canResumeAiVaultSearchHit(hit: AiVaultSearchHit): boolean {
-  return hit.source.presence === 'present' && hit.resumeCommand !== undefined
+  return (
+    hit.structuredSession !== undefined ||
+    (hit.source.presence === 'present' && hit.resumeCommand !== undefined)
+  )
 }
 
 export function hasAiVaultSearchHitPath(hit: AiVaultSearchHit): boolean {

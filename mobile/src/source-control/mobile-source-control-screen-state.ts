@@ -58,8 +58,7 @@ export type MobileGitStatusEntryView = MobileGitStatusEntry & {
   unstageActionId: string
 }
 
-// Decorate raw status entries with the row-level capability/action-id fields the
-// file list needs. Opener guards must use the same canOpen rule.
+// File openers must use the same row canOpen rule as the list.
 export function buildMobileGitStatusEntryViews(
   entries: readonly MobileGitStatusEntry[]
 ): MobileGitStatusEntryView[] {
@@ -118,10 +117,6 @@ export const SOURCE_CONTROL_ACTION_ICONS: Record<MobileSourceControlActionIcon, 
 
 export const SELECTOR_RETRY_COUNT = 3
 export const SELECTOR_RETRY_DELAY_MS = 250
-
-export function firstParam(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? (value[0] ?? '') : (value ?? '')
-}
 
 export function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

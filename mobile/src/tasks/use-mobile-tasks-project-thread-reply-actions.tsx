@@ -56,11 +56,7 @@ export function useMobileTasksProjectThreadReplyActions(
           },
           { timeoutMs: 30_000 }
         )
-        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Preserve the established response shape at this boundary.
-        const result = githubProjectCommentDelete.interpret(reply) as {
-          ok?: boolean
-          error?: string | { message?: string }
-        }
+        const result = githubProjectCommentDelete.interpret(reply)
         if (result.ok === false) {
           throw new Error(
             typeof result.error === 'string'
@@ -155,8 +151,6 @@ export function useMobileTasksProjectThreadReplyActions(
       setProjectMutating(true)
       setProjectRowDetailError('')
       try {
-        // The same predicate as before, but as the anchor it selects: `commentId` and `line` are
-        // numbers only inside it, which the boolean it used to be could not carry to the send.
         const reviewAnchor =
           row.itemType === 'PULL_REQUEST' &&
           comment.path &&
@@ -164,8 +158,6 @@ export function useMobileTasksProjectThreadReplyActions(
           typeof comment.id === 'number'
             ? { path: comment.path, line: comment.line, commentId: comment.id }
             : null
-        // A review reply and a plain issue comment are different methods, so each arm sends its
-        // own operation rather than one call picking a method string.
         const written = reviewAnchor
           ? githubReviewCommentReplyWrite.interpret(
               await githubReviewCommentReplyWrite.request(
@@ -196,16 +188,10 @@ export function useMobileTasksProjectThreadReplyActions(
                 { timeoutMs: 30_000 }
               )
             )
-        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Preserve the established response shape at this boundary.
-        const result = written as {
-          ok?: boolean
-          error?: string
-          comment?: DetailComment
+        if (written.ok === false) {
+          throw new Error(written.error ?? 'Failed to reply')
         }
-        if (result.ok === false) {
-          throw new Error(result.error ?? 'Failed to reply')
-        }
-        const reply: DetailComment = result.comment ?? {
+        const reply: DetailComment = written.comment ?? {
           id: `local-${Date.now()}`,
           body,
           createdAt: new Date().toISOString(),

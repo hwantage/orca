@@ -1,3 +1,4 @@
+import '../../../unused-default-rpc-methods.test-fixture'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -213,7 +214,6 @@ describe('orchestration worker-start prompt contract', () => {
     expect(persisted.getTask(harness.taskId)?.status).toBe('dispatched')
     expect(persisted.getDispatchContextById(dispatchId)).toMatchObject({
       status: 'dispatched',
-      capability_hash: expect.any(String),
       capability_revoked_at: null
     })
     expect(persisted.getWorkerDispatch(dispatchId)).toMatchObject({
@@ -276,7 +276,6 @@ describe('orchestration worker-start prompt contract', () => {
     expect(await pending).toMatchObject({ ok: true, result: { state: 'outcome_unknown' } })
     expect(harness.db.findActiveDispatchForAssignee(harness.handle)).toMatchObject({
       status: 'pending',
-      capability_hash: expect.any(String),
       capability_revoked_at: null
     })
     expect(harness.submittedTurns()).toBe(1)
@@ -305,15 +304,14 @@ describe('orchestration worker-start prompt contract', () => {
     expect(harness.db.getQuestion(questionId)?.status).toBe('pending')
   })
 
-  it('reports a swallowed Enter as start_unknown while keeping the worker and its capability', async () => {
+  it('reports a swallowed Enter as start_unknown while keeping the worker reportable', async () => {
     vi.useFakeTimers()
     const harness = await createPromptContractHarness('swallowed')
     const pending = harness.dispatcher.dispatch(harness.request)
 
     await vi.runAllTimersAsync()
     const response = await pending
-    // Codex supports turn-start observation and no turn started, so ready would be a lie: the
-    // paste can sit unsent in the composer while the receipt looks like a healthy dispatch.
+    // If Codex turn observation sees no start, accepted paste may still be unsent; never claim ready.
     expect(response).toMatchObject({
       ok: true,
       result: {
@@ -343,9 +341,7 @@ describe('orchestration worker-start prompt contract', () => {
     expect(persisted.getDispatchContextById(dispatchId)).toMatchObject({
       status: 'pending',
       last_failure: null,
-      // The capability survives so a worker that recovers can still report; worker-report
-      // settlement reconnects a start_unknown worker through 'ready'.
-      capability_hash: expect.any(String),
+      // Keep lifecycle open for recovery reports; report settlement moves start_unknown through ready.
       capability_revoked_at: null
     })
     expect(persisted.getWorkerDispatch(dispatchId)).toMatchObject({
@@ -381,6 +377,7 @@ describe('orchestration worker-start prompt contract', () => {
     const { runtime, handle } = await createAgentPromptSubmissionRuntime(() => undefined, 'codex')
     runtime.onPtyData('pty-prompt', '\x1b]0;Codex working\x07', Date.now())
     const pending = runtime.sendTerminalAgentPrompt(handle, 'queued prompt', {
+      inputKind: 'driving',
       acceptQueued: true,
       requestId: 'busy-swallowed',
       observationTimeoutMs: 0

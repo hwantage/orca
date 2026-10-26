@@ -1,3 +1,6 @@
+import { hostNewWorktreeSessionRoute } from '../host-new-worktree-session-route'
+import { workspaceRouteHref } from '../navigation/workspace-execution-host'
+import { taskRepoServer } from './task-repo-host-routing'
 import { settingsRead } from '../transport/settings-read-operations'
 import type { WorkspaceSshStateModel } from './use-mobile-tasks-workspace-ssh-state'
 import {
@@ -86,7 +89,7 @@ export function useMobileTasksWorkspaceCreateActions(model: WorkspaceSshStateMod
             setRuntimeTaskSettings(latestRuntimeTaskSettings)
           }
         } catch {
-          // Best-effort refresh; the runtime still validates agent availability before spawning.
+          // Detection refresh is best-effort; the runtime validates again before spawning.
         }
         const selectedAgent =
           agentOverride &&
@@ -106,8 +109,7 @@ export function useMobileTasksWorkspaceCreateActions(model: WorkspaceSshStateMod
         const setupResolution = await resolveCreateSetupDecision(targetRepo, setupOverride)
         const comment = noteOverride?.trim()
         if (setupResolution.kind === 'prompt') {
-          // Why: desktop does not silently create when a repo policy says setup
-          // requires a per-workspace decision. Mobile must ask before create too.
+          // Honor per-workspace setup policy by asking before create, matching desktop.
           setSetupPrompt({
             item,
             ...(repoIdOverride ? { repoIdOverride } : {}),
@@ -134,9 +136,7 @@ export function useMobileTasksWorkspaceCreateActions(model: WorkspaceSshStateMod
             setupResolution.setupTrust.contentHash
           )
         ) {
-          // Why: desktop prompts before running repo-owned orca.yaml hooks. Mobile
-          // stores the same trust hash in persisted UI state so either surface can
-          // approve the script version for future workspace creates.
+          // Persist the desktop’s trust hash so either surface can approve this repo script version.
           setSetupPrompt(null)
           setOrcaYamlTrustPrompt({
             item,
@@ -181,14 +181,12 @@ export function useMobileTasksWorkspaceCreateActions(model: WorkspaceSshStateMod
               },
               { timeoutMs: 30_000 }
             )
-            // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Preserve the established response shape at this boundary.
-            const result = worktreePrBaseResolve.interpret(reply) as
-              | { baseBranch: string; pushTarget?: GitPushTarget }
-              | { error: string }
+            const result = worktreePrBaseResolve.interpret(reply)
             if ('error' in result) {
               throw new Error(result.error)
             }
-            prStartPoint = result
+            // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the resolved arm requires `baseBranch` and passes the rest of the start point through, because the create params spread the record and the host reads what it recognises.
+            prStartPoint = result as { baseBranch: string; pushTarget?: GitPushTarget }
           }
           params = buildTaskWorkspaceCreateParams({
             item,
@@ -224,14 +222,12 @@ export function useMobileTasksWorkspaceCreateActions(model: WorkspaceSshStateMod
               },
               { timeoutMs: 30_000 }
             )
-            // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Preserve the established response shape at this boundary.
-            const result = worktreeMrBaseResolve.interpret(reply) as
-              | { baseBranch: string; pushTarget?: GitPushTarget }
-              | { error: string }
+            const result = worktreeMrBaseResolve.interpret(reply)
             if ('error' in result) {
               throw new Error(result.error)
             }
-            mrStartPoint = result
+            // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: as the PR arm above.
+            mrStartPoint = result as { baseBranch: string; pushTarget?: GitPushTarget }
           }
           params = buildTaskWorkspaceCreateParams({
             item,
@@ -263,21 +259,21 @@ export function useMobileTasksWorkspaceCreateActions(model: WorkspaceSshStateMod
         const createReply = await worktreeCreateRun.request(client, params, {
           timeoutMs: WORKTREE_CREATE_TIMEOUT_MS
         })
-        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: Preserve the established response shape at this boundary.
-        const result = worktreeCreateRun.interpret(createReply) as {
-          worktree: { id: string; displayName?: string }
-          warning?: string
-        }
+        const result = worktreeCreateRun.interpret(createReply)
         setActionItem(null)
         setWorkspaceCreateDraft(null)
         setSetupPrompt(null)
-        const name = result.worktree.displayName ?? item.title
-        const queryParams = new URLSearchParams({ name, created: '1' })
-        if (result.warning) {
-          queryParams.set('warning', result.warning)
-        }
+        // Use the shared route builder so special characters in host ids are encoded for bridge validation.
         router.push(
-          `/h/${hostId}/session/${encodeURIComponent(result.worktree.id)}?${queryParams.toString()}`
+          workspaceRouteHref(
+            hostNewWorktreeSessionRoute(
+              hostId,
+              result.worktree.id,
+              result.worktree.displayName ?? item.title,
+              result.warning
+            ),
+            taskRepoServer(targetRepo)
+          )
         )
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to create workspace')

@@ -20,6 +20,7 @@ import {
   type BrowserZoomState
 } from './browser-touch-geometry'
 import type { BrowserPointerModifier } from './MobileBrowserPointerModifiers'
+import type { BrowserDialogState } from './mobile-browser-stream-events'
 import type { BrowserPageCommandSend, BrowserPageParams } from './use-mobile-browser-request'
 import type { BrowserScreencastFrameMetadata } from '../transport/browser-screencast-protocol'
 
@@ -50,7 +51,7 @@ type MobileBrowserInteractionArgs = {
   pinchRef: { current: PinchGesture | null }
   pointerModifiers: BrowserPointerModifier[]
   sendBrowserRequest: SendBrowserRequest
-  setDialog: Dispatch<SetStateAction<{ dialogType: string; message: string } | null>>
+  setDialog: Dispatch<SetStateAction<BrowserDialogState | null>>
   setError: Dispatch<SetStateAction<string | null>>
   setKeyboardValue: Dispatch<SetStateAction<string>>
   scrollingRef: { current: boolean }
@@ -253,8 +254,7 @@ export function useMobileBrowserInteractions(args: MobileBrowserInteractionArgs)
       }
       const moved = Math.hypot(gesture.dx, gesture.dy)
       if (moved <= TAP_SLOP && Date.now() - start.t < LONG_PRESS_MS) {
-        // Why: native browser taps resolve at touch-up. Using touch-down makes
-        // tiny finger drift feel like the click lands left/up of the finger.
+        // Resolve native taps at touch-up; touch-down makes finger drift feel like click lands off target.
         const release = readLocalTouchPoint(event.nativeEvent) ?? start
         const point = mapTouchPoint(release.x, release.y)
         if (point) {
@@ -280,7 +280,9 @@ export function useMobileBrowserInteractions(args: MobileBrowserInteractionArgs)
           scrollingRef.current = false
           startPointRef.current = null
         },
-        onPanResponderTerminationRequest: () => true
+        // The long-press right-click outlives the WebView's own long-press contextmenu at ~500 ms.
+        onPanResponderTerminationRequest: (event) =>
+          !('type' in event.nativeEvent) || event.nativeEvent.type !== 'contextmenu'
       }),
     [clearLongPressTimer, handleResponderGrant, handleResponderMove, handleResponderRelease]
   )

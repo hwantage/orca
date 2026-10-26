@@ -52,11 +52,14 @@ export async function persistSetupHookTrustApproval(args: {
   return next
 }
 
+// Hooks may omit setupTrust; validate the pair here while preserving other host fields.
 export function normalizeSetupHookTrust(
-  setupTrust: SetupHookTrust | null | undefined
+  setupTrust: { contentHash?: string; scriptContent?: string } | null | undefined
 ): SetupHookTrust | null {
-  if (!setupTrust?.contentHash || !setupTrust.scriptContent) {
+  const contentHash = setupTrust?.contentHash
+  const scriptContent = setupTrust?.scriptContent
+  if (!contentHash || !scriptContent) {
     return null
   }
-  return setupTrust
+  return { ...setupTrust, contentHash, scriptContent }
 }

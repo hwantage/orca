@@ -1,9 +1,8 @@
 import type React from 'react'
+import { refreshRuntimeEnvironmentCatalog } from '@/runtime/runtime-environment-pairing-refresh'
 import {
   ArchiveRestore,
-  Calendar,
   ChevronRight,
-  Clock3,
   FolderOpen,
   ListFilter,
   PanelsTopLeft,
@@ -28,8 +27,7 @@ import {
   AI_VAULT_AGENTS,
   type AiVaultAgent,
   type AiVaultGroup,
-  type AiVaultScope,
-  type AiVaultSort
+  type AiVaultScope
 } from '../../../../shared/ai-vault-types'
 import { getExecutionHostLabel, type ExecutionHostScope } from '../../../../shared/execution-host'
 import { agentLabel, type AiVaultSessionGroup } from './ai-vault-session-filters'
@@ -167,7 +165,14 @@ export function VaultHostScopeMenu({
   const label = selectedOption?.label ?? getExecutionHostLabel(executionHostScope)
 
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        // A fresh profile has no saved-server file to watch until the first CLI add creates it.
+        if (open) {
+          void refreshRuntimeEnvironmentCatalog()
+        }
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
@@ -206,14 +211,12 @@ export function VaultHostScopeMenu({
 export function VaultViewMenu({
   searching = false,
   agents,
-  sort,
   group,
   hideEmptySessions,
   sessionLimit,
   adjustmentCount,
   onAgentEnabledChange,
   onAllAgentsEnabledChange,
-  onSortChange,
   onGroupChange,
   onHideEmptySessionsChange,
   onSessionLimitChange,
@@ -221,14 +224,12 @@ export function VaultViewMenu({
 }: {
   searching?: boolean
   agents: readonly AiVaultAgent[]
-  sort: AiVaultSort
   group: AiVaultGroup
   hideEmptySessions: boolean
   sessionLimit: AiVaultSessionLimit
   adjustmentCount: number
   onAgentEnabledChange: (agent: AiVaultAgent, enabled: boolean) => void
   onAllAgentsEnabledChange: (enabled: boolean) => void
-  onSortChange: (sort: AiVaultSort) => void
   onGroupChange: (group: AiVaultGroup) => void
   onHideEmptySessionsChange: (hideEmptySessions: boolean) => void
   onSessionLimitChange: (limit: AiVaultSessionLimit) => void
@@ -271,12 +272,11 @@ export function VaultViewMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sideOffset={6} className="w-56">
-        {/* Why: Select all / Clear lets users isolate one agent without unchecking 15 boxes. */}
         <div className="flex items-center justify-between px-2 py-1">
           <span className="text-[11px] font-semibold text-muted-foreground">
             {translate('auto.components.right.sidebar.AiVaultPanelControls.agents', 'Agents')}
           </span>
-          {/* Why: real menu items so arrow keys reach them; plain buttons are skipped by Radix roving focus. */}
+          {/* Use menu items so Radix arrow navigation can reach Select all/Clear. */}
           <div className="flex items-center gap-1">
             <DropdownMenuItem
               disabled={allAgentsSelected}
@@ -317,26 +317,6 @@ export function VaultViewMenu({
         ))}
         {!searching && (
           <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>
-              {translate('auto.components.right.sidebar.AiVaultPanelControls.sort', 'Sort')}
-            </DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={sort}
-              onValueChange={(value) => onSortChange(value as AiVaultSort)}
-            >
-              <DropdownMenuRadioItem value="updated">
-                <Clock3 className="size-3.5" />
-                {translate(
-                  'auto.components.right.sidebar.AiVaultPanelControls.lastUpdated',
-                  'Last updated'
-                )}
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="created">
-                <Calendar className="size-3.5" />
-                {translate('auto.components.right.sidebar.AiVaultPanelControls.created', 'Created')}
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
             <DropdownMenuLabel>
               {translate('auto.components.right.sidebar.AiVaultPanelControls.group', 'Group')}

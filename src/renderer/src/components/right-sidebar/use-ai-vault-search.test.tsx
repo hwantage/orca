@@ -1,17 +1,33 @@
 // @vitest-environment happy-dom
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import type { AiVaultSearchSort } from '../../../../shared/ai-vault-types'
 import type {
   AiVaultSearchRequest,
   AiVaultSearchResponse
 } from '../../../../shared/ai-vault-search-types'
 import type { ExecutionHostId, ExecutionHostScope } from '../../../../shared/execution-host'
 import { searchHit, searchResults } from '../../../../shared/ai-vault-search-test-fixture'
+import { resetStructuredAgentSessionStatusFeedsForTests } from '@/runtime/structured-agent-session-status-feed'
+import type { AgentSessionStatusEvent } from '../../../../shared/agent-session-wire'
 import { useAiVaultPanelSearch, useAiVaultSearch } from './use-ai-vault-search'
 
+const mockSettings: { aiVaultSearch?: { enabled: boolean } } = {}
 vi.mock('@/store', () => ({
-  useAppStore: (select: (state: { settings: undefined }) => unknown) =>
-    select({ settings: undefined })
+  useAppStore: (
+    select: (state: { settings: typeof mockSettings; runtimeEnvironments: never[] }) => unknown
+  ) => select({ settings: mockSettings, runtimeEnvironments: [] })
+}))
+
+const feeds = vi.hoisted(() => ({
+  subscribe: vi.fn(),
+  emit: new Map<string, (event: AgentSessionStatusEvent) => void>()
+}))
+vi.mock('@/runtime/structured-agent-session-client', () => ({
+  subscribeStructuredAgentSessionStatus: feeds.subscribe
+}))
+vi.mock('@/runtime/runtime-rpc-client', () => ({
+  runtimeEnvironmentSupportsCapability: async () => true
 }))
 
 const ALL_AGENTS = ['codex' as const]
@@ -29,14 +45,24 @@ const empty: AiVaultSearchResponse = {
   truncated: { candidates: false, snippets: 0, query: false, freshness: false }
 }
 beforeEach(() => {
+  resetStructuredAgentSessionStatusFeedsForTests()
+  feeds.emit.clear()
+  feeds.subscribe.mockImplementation(async (target, emit) => {
+    feeds.emit.set(target.environmentId ?? 'local', emit)
+    return { unsubscribe: vi.fn() }
+  })
   vi.useFakeTimers()
   Object.defineProperty(window, 'api', {
     configurable: true,
     value: { aiVault: { searchSessions } }
   })
   searchSessions.mockReset().mockResolvedValue(empty)
+  delete mockSettings.aiVaultSearch
 })
-afterEach(() => vi.useRealTimers())
+afterEach(() => {
+  resetStructuredAgentSessionStatusFeedsForTests()
+  vi.useRealTimers()
+})
 async function debounce() {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(250)
@@ -233,7 +259,7 @@ it('searches every computer at once and keeps each hit on the computer that owns
     ]
   })
   const { result, unmount } = renderHook(() =>
-    useAiVaultPanelSearch('needle', ALL_AGENTS, undefined, 'all')
+    useAiVaultPanelSearch('needle', ALL_AGENTS, undefined, 'all', 'relevance')
   )
   await debounce()
   expect(searchSessions).toHaveBeenCalledExactlyOnceWith(
@@ -247,6 +273,28 @@ it('searches every computer at once and keeps each hit on the computer that owns
   unmount()
 })
 
+it('sends the sort only when it is not the host default', async () => {
+  const initialProps: { sort: AiVaultSearchSort } = { sort: 'relevance' }
+  const { rerender, unmount } = renderHook(
+    ({ sort }) => useAiVaultPanelSearch('needle', ALL_AGENTS, undefined, 'all', sort),
+    { initialProps }
+  )
+  await debounce()
+  expect(searchSessions.mock.calls[0]?.[0]).toEqual({
+    query: 'needle',
+    filters: { agents: ALL_AGENTS },
+    cursor: undefined
+  })
+  rerender({ sort: 'newest' })
+  await debounce()
+  expect(searchSessions.mock.calls[1]?.[0]).toEqual({
+    query: 'needle',
+    filters: { agents: ALL_AGENTS, sort: 'newest' },
+    cursor: undefined
+  })
+  unmount()
+})
+
 it('restarts page one under the all scope when the merged cursor goes stale', async () => {
   searchSessions.mockResolvedValueOnce({
     ...searchResults(),
@@ -254,7 +302,7 @@ it('restarts page one under the all scope when the merged cursor goes stale', as
     page: { cursor: 'merged', hasMore: true }
   })
   const { result, unmount } = renderHook(() =>
-    useAiVaultPanelSearch('needle', ALL_AGENTS, undefined, 'all')
+    useAiVaultPanelSearch('needle', ALL_AGENTS, undefined, 'all', 'relevance')
   )
   await debounce()
   searchSessions
@@ -266,4 +314,167 @@ it('restarts page one under the all scope when the merged cursor goes stale', as
   expect(searchSessions.mock.calls[2]).toEqual([ALL_REQUEST, 'all'])
   expect(result.current.sessions.map((session) => session.executionHostId)).toEqual(['local'])
   unmount()
+})
+
+it('leaves the box as the legacy title filter while local indexing consent is pending', async () => {
+  const { result, unmount } = renderHook(() =>
+    useAiVaultPanelSearch('needle', ALL_AGENTS, undefined, 'local', 'relevance')
+  )
+  await debounce()
+  expect(searchSessions).not.toHaveBeenCalled()
+  expect(result.current.searching).toBe(false)
+  expect(result.current.hasQuery).toBe(true)
+  expect(result.current.needsLocalConsent).toBe(true)
+  expect(result.current.loading).toBe(false)
+  expect(result.current.sessions).toEqual([])
+  unmount()
+})
+
+it('searches the local index with the same query once consent is on', async () => {
+  mockSettings.aiVaultSearch = { enabled: true }
+  const { result, unmount } = renderHook(() =>
+    useAiVaultPanelSearch('needle', ALL_AGENTS, undefined, 'local', 'relevance')
+  )
+  await debounce()
+  expect(searchSessions).toHaveBeenCalledExactlyOnceWith(
+    { ...ALL_REQUEST, cursor: undefined },
+    'local'
+  )
+  expect(result.current.searching).toBe(true)
+  expect(result.current.hasQuery).toBe(true)
+  expect(result.current.needsLocalConsent).toBe(false)
+  unmount()
+})
+
+it('is neither searching nor holding a query for a blank box', async () => {
+  const { result, unmount } = renderHook(() =>
+    useAiVaultPanelSearch('   ', ALL_AGENTS, undefined, 'local', 'relevance')
+  )
+  await debounce()
+  expect(searchSessions).not.toHaveBeenCalled()
+  expect(result.current.searching).toBe(false)
+  expect(result.current.hasQuery).toBe(false)
+  unmount()
+})
+
+// #22453: a host's index is not this client's to turn on, so its "off" must not wall the list.
+it.each(['disabled', 'no-service'] as const)(
+  'falls back to the title filter when a single host answers %s',
+  async (reason) => {
+    searchSessions.mockResolvedValue({ kind: 'unavailable', reason })
+    const initialProps = { query: 'needle' }
+    const { result, rerender, unmount } = renderHook(
+      ({ query }) => useAiVaultPanelSearch(query, ALL_AGENTS, undefined, 'ssh:box', 'relevance'),
+      { initialProps }
+    )
+    await debounce()
+    expect(result.current.searching).toBe(false)
+    expect(result.current.titleOnly).toBe(true)
+    expect(result.current.loading).toBe(false)
+
+    rerender({ query: 'needles' })
+    await debounce()
+    expect(searchSessions).toHaveBeenCalledOnce()
+    expect(result.current.searching).toBe(false)
+    unmount()
+  }
+)
+
+it('keeps full-text search for a host that is merely not ready', async () => {
+  searchSessions.mockResolvedValue({ kind: 'unavailable', reason: 'not-ready' })
+  const { result, unmount } = renderHook(() =>
+    useAiVaultPanelSearch('needle', ALL_AGENTS, undefined, 'ssh:box', 'relevance')
+  )
+  await debounce()
+  expect(result.current.searching).toBe(true)
+  expect(result.current.titleOnly).toBe(false)
+  unmount()
+})
+
+it('revalidates active search without losing hits, accepting old pages, or touching another host', async () => {
+  const request = { query: 'inventory' }
+  const owned = {
+    ...searchHit(),
+    title: 'Budget plan',
+    structuredSession: { sessionId: 'native', workspaceId: 'workspace' }
+  }
+  searchSessions.mockResolvedValue({
+    ...searchResults(),
+    hits: [owned],
+    page: { cursor: 'old-page', hasMore: true }
+  })
+  const a = renderHook(() => useAiVaultSearch(request, 'runtime:a', ''))
+  const b = renderHook(() => useAiVaultSearch(request, 'runtime:b', ''))
+  const summary = {
+    sessionId: 'native',
+    workspaceId: 'workspace',
+    agent: 'pi' as const,
+    latestPrompt: '',
+    status: null,
+    updatedAt: 1,
+    providerSession: { key: 'session_id' as const, id: '/provider' }
+  }
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  await act(async () => feeds.emit.get('a')?.({ type: 'snapshot', sessions: [summary] }))
+  await debounce()
+  const baseline = searchSessions.mock.calls.length
+  for (const n of [10, 100]) {
+    await act(async () => {
+      for (let i = 0; i < n; i++) {
+        feeds.emit.get('a')?.({
+          type: 'status',
+          session: { ...summary, updatedAt: i, toolName: `${i}` }
+        })
+        feeds.emit.get('a')?.({
+          type: 'snapshot',
+          sessions: [],
+          namingActiveSessionIds: [],
+          conversationNames: [{ sessionId: 'native', conversationName: `${i}` }]
+        })
+      }
+    })
+    expect(searchSessions).toHaveBeenCalledTimes(baseline)
+  }
+  let settlePage = (_response: AiVaultSearchResponse): void => {}
+  searchSessions.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        settlePage = resolve
+      })
+  )
+  act(() => a.result.current.loadMore())
+  const { providerSession: _provider, ...detached } = summary
+  await act(async () => {
+    for (const id of ['/next', '/third']) {
+      feeds.emit.get('a')?.({
+        type: 'status',
+        session: {
+          ...summary,
+          providerSession: { key: 'session_id', id }
+        }
+      })
+    }
+    feeds.emit.get('a')?.({ type: 'status', session: detached })
+  })
+  expect(a.result.current.hits).toEqual([owned])
+  const recovered = { ...searchHit(), title: 'Check inventory' }
+  searchSessions.mockResolvedValueOnce({ ...searchResults(), hits: [recovered] })
+  await act(async () =>
+    settlePage({ ...searchResults(), hits: [{ ...searchHit(), title: 'obsolete' }] })
+  )
+  expect(a.result.current.hits).toEqual([recovered])
+  expect(b.result.current.hits).toEqual([owned])
+  expect(
+    searchSessions.mock.calls.slice(baseline).map(([args, scope]) => [args.cursor, scope])
+  ).toEqual([
+    ['old-page', 'runtime:a'],
+    [undefined, 'runtime:a']
+  ])
+  a.unmount()
+  b.unmount()
+  await act(async () => feeds.emit.get('a')?.({ type: 'snapshot', sessions: [] }))
+  expect(searchSessions).toHaveBeenCalledTimes(baseline + 2)
 })
