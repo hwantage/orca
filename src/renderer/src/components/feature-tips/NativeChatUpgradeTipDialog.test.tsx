@@ -1,13 +1,16 @@
-import type { ReactNode } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
+// @vitest-environment happy-dom
+
+import { act, type JSX, type ReactNode } from 'react'
+import { createRoot } from 'react-dom/client'
 import { describe, expect, it, vi } from 'vitest'
 import { FEATURE_TIPS, type FeatureTip } from '../../../../shared/feature-tips'
 import { NativeChatUpgradeTipDialog } from './NativeChatUpgradeTipDialog'
-import { NativeChatUpgradeFeatureTipVisual } from './NativeChatUpgradeFeatureTipVisual'
 
 vi.mock('@/components/ui/dialog', () => ({
   Dialog: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogContent: ({ children, className }: { children: ReactNode; className?: string }) => (
+    <div className={className}>{children}</div>
+  ),
   DialogDescription: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DialogFooter: ({ children }: { children: ReactNode }) => <footer>{children}</footer>,
   DialogHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
@@ -22,47 +25,57 @@ function getTip(): FeatureTip {
   return tip
 }
 
-function textOf(html: string): string {
-  return html
-    .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&#x27;/g, "'")
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
+function dialog(
+  chatModeOn: boolean,
+  onPrimaryAction = (): void => {},
+  onOpenChange = (_open: boolean): void => {},
+  primaryBusy = false
+): JSX.Element {
+  return (
+    <NativeChatUpgradeTipDialog
+      open
+      tip={getTip()}
+      primaryBusy={primaryBusy}
+      chatModeOn={chatModeOn}
+      onOpenChange={onOpenChange}
+      onPrimaryAction={onPrimaryAction}
+      onSettingsClick={() => {}}
+    />
+  )
 }
 
 describe('NativeChatUpgradeTipDialog', () => {
-  it('shows the approved copy with one Got it button and the Experimental settings link', () => {
-    const text = textOf(
-      renderToStaticMarkup(
-        <NativeChatUpgradeTipDialog
-          open
-          tip={getTip()}
-          primaryBusy={false}
-          onOpenChange={() => {}}
-          onPrimaryAction={() => {}}
-          onSettingsClick={() => {}}
-        />
+  it('dismisses with Leave Off and runs the primary action only with Enable Now', () => {
+    const onPrimaryAction = vi.fn()
+    const onOpenChange = vi.fn()
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    act(() => root.render(dialog(false, onPrimaryAction, onOpenChange)))
+    const buttons = container.querySelectorAll<HTMLButtonElement>('footer button')
+    expect(buttons).toHaveLength(2)
+    expect(buttons[0]?.textContent).toBe('Leave Off')
+    expect(buttons[0]?.hasAttribute('data-variant')).toBe(false)
+    expect(buttons[1]?.textContent).toBe('Enable Now')
+    expect(buttons[1]?.getAttribute('data-variant')).toBe('default')
+    expect(buttons[1]?.classList.contains('flex-1')).toBe(true)
+    expect(buttons[0]?.classList.contains('flex-1')).toBe(false)
+    act(() => buttons[0]?.click())
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+    expect(onPrimaryAction).not.toHaveBeenCalled()
+    act(() => buttons[1]?.click())
+    expect(onPrimaryAction).toHaveBeenCalledOnce()
+    act(() => root.render(dialog(false, onPrimaryAction, onOpenChange, true)))
+    expect(
+      Array.from(container.querySelectorAll<HTMLButtonElement>('footer button')).every(
+        (b) => b.disabled
       )
-    )
-    expect(text).toContain('NEW')
-    expect(text).toContain('Native chat got an upgrade')
-    expect(text).toContain(
-      'New chats with supported agents now open in the upgraded chat view. To move between chat and CLI, open Agent Session History in the right sidebar:'
-    )
-    expect(text).toContain(
-      'Resume in New Native Chat opens a supported CLI conversation in native chat.'
-    )
-    expect(text).toContain(
-      'Resume in New CLI copies a Claude or Codex chat into a new CLI session. The original chat stays as it is.'
-    )
-    expect(text).toContain('Manage Chat UI in Settings → Experimental.')
-    expect(text).toContain('Got it')
-    expect(text).not.toContain('Maybe Later')
-  })
-
-  it('pictures both real menu actions, one at a time', () => {
-    const html = renderToStaticMarkup(<NativeChatUpgradeFeatureTipVisual />)
-    expect(html).toContain('Agent Session History')
-    expect(html).toMatch(/data-highlighted="true"[^>]*>.*Resume in New CLI/)
-    expect(html).not.toContain('Resume in New Native Chat')
+    ).toBe(true)
+    act(() => root.render(dialog(true, onPrimaryAction, onOpenChange)))
+    expect(container.querySelectorAll('footer button')).toHaveLength(1)
+    expect(container.querySelector('footer button')?.textContent).toBe('Got It')
+    expect(container.querySelector('[role="switch"]')).toBeNull()
+    act(() => root.unmount())
   })
 })

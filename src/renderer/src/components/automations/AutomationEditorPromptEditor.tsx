@@ -35,8 +35,7 @@ function installPromptEditorEscapeDismiss(
     if (isMonacoFindWidgetOpen(target)) {
       return
     }
-    // Why: Monaco swallows Escape even with find closed; the wrapping
-    // dialog still needs the same dismiss path a textarea used to have.
+    // Monaco consumes Escape even with find closed; preserve the surrounding dialog’s dismiss path.
     if (!onDismissRef.current) {
       return
     }
@@ -125,8 +124,7 @@ export function AutomationEditorPromptEditor({
     })
   }, [])
 
-  // Why: templates rewrite the draft while this editor stays mounted; push an
-  // undoable model edit instead of setValue so Cmd+Z can revert the apply.
+  // Apply template changes as undoable model edits; setValue would discard Cmd+Z history.
   useLayoutEffect(() => {
     contentRef.current = value
     const mountedEditor = editorRef.current
@@ -148,8 +146,7 @@ export function AutomationEditorPromptEditor({
       className={cn(
         'relative min-h-0 w-full flex-1 overflow-hidden rounded-lg border border-border/70 bg-editor-surface',
         'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
-        // Why: Monaco's built-in placeholder uses this token; mix muted
-        // foreground so it reads as ghost text, not typed prompt content.
+        // Tint Monaco’s placeholder token as ghost text rather than typed content.
         '[--vscode-editor-placeholder-foreground:color-mix(in_srgb,var(--muted-foreground)_50%,transparent)]'
       )}
     >
@@ -157,8 +154,7 @@ export function AutomationEditorPromptEditor({
         <Editor
           height="100%"
           defaultLanguage="plaintext"
-          // Why: defaultValue, not controlled value — this surface owns
-          // post-mount sync so React cannot wipe Monaco's undo stack.
+          // Own post-mount syncing; a controlled value would wipe Monaco’s undo stack.
           defaultValue={value}
           theme={isDark ? 'vs-dark' : 'vs'}
           onChange={handleChange}
