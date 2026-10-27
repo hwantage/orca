@@ -30,6 +30,11 @@ const MANAGED_SSH_HARNESS =
 
 export const PR_E2E_SOURCE_ROUTES = [
   {
+    id: 'browser.image-link-native-focus',
+    specs: ['tests/e2e/browser-image-link-focus.spec.ts'],
+    matches: (file) => /\/(?:browser-page-guest-focus|browser-link-server)\.ts$/.test(file)
+  },
+  {
     id: 'ssh.orcad-editor-ownership',
     specs: ['tests/e2e/ssh-orcad-editor-ownership.spec.ts'],
     matches: (file) =>

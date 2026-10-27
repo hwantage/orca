@@ -1,11 +1,48 @@
+import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { test, expect } from './helpers/orca-app'
 import { startBrowserLinkServer } from './helpers/browser-link-server'
 import { getActiveWorktreeId } from './helpers/store'
 
 test.describe('Image link focus', () => {
-  test('focuses the image destination and forwards its close shortcut without closing the opener', async ({
-    orcaPage
+  test.skip(
+    process.platform !== 'linux' ||
+      process.env.ORCA_E2E_BROWSER_NATIVE_XVFB !== '1' ||
+      (process.env.GITHUB_ACTIONS !== 'true' && !existsSync('/.dockerenv')),
+    'Native input requires the owned CI or Docker Xvfb display'
+  )
+
+  test('routes native Ctrl+W to the image tab and preserves the opener @headful', async ({
+    orcaPage,
+    electronApp
   }) => {
+    const ownedWindow = await electronApp.browserWindow(orcaPage)
+    let nativeWindowId: number
+    try {
+      nativeWindowId = await ownedWindow.evaluate((window) => {
+        if (
+          process.platform !== 'linux' ||
+          process.env.ORCA_BACKGROUND_LAUNCH !== '1' ||
+          process.env.ORCA_E2E_BROWSER_NATIVE_XVFB !== '1' ||
+          !/^:\d+(?:\.\d+)?$/.test(process.env.DISPLAY ?? '') ||
+          (process.env.GITHUB_ACTIONS !== 'true' &&
+            !process.getBuiltinModule('node:fs').existsSync('/.dockerenv')) ||
+          window.isDestroyed()
+        ) {
+          throw new Error('Native browser input requires an owned CI or Docker Xvfb window')
+        }
+        window.showInactive()
+        return window.getNativeWindowHandle().readUInt32LE(0)
+      })
+      await expect.poll(() => ownedWindow.evaluate((window) => window.isVisible())).toBe(true)
+    } finally {
+      await ownedWindow.dispose()
+    }
+    await orcaPage.waitForFunction(() => document.visibilityState === 'visible')
+    const nativeInput = (...args: string[]): void => {
+      execFileSync('xdotool', args, { stdio: 'pipe', timeout: 10_000 })
+    }
+    nativeInput('windowactivate', '--sync', String(nativeWindowId))
     const fixture = await startBrowserLinkServer()
     try {
       const worktreeId = (await getActiveWorktreeId(orcaPage))!
@@ -41,7 +78,35 @@ test.describe('Image link focus', () => {
       if (!bounds) {
         throw new Error('The source image webview has no visible bounds')
       }
-      await orcaPage.mouse.click(bounds.x + point.x, bounds.y + point.y)
+      await sourceWebview.evaluate((webview: Electron.WebviewTag) =>
+        webview.executeJavaScript(`window.addEventListener('keydown', event => {
+          if (event.key === 'y') document.documentElement.dataset.nativeKeySeen = 'y'
+        }); true`)
+      )
+      nativeInput(
+        'mousemove',
+        '--window',
+        String(nativeWindowId),
+        String(Math.round(bounds.x + 10)),
+        String(Math.round(bounds.y + 10))
+      )
+      nativeInput('click', '1')
+      nativeInput('key', 'y')
+      await expect
+        .poll(() =>
+          sourceWebview.evaluate((webview: Electron.WebviewTag) =>
+            webview.executeJavaScript(`document.documentElement.dataset.nativeKeySeen === 'y'`)
+          )
+        )
+        .toBe(true)
+      nativeInput(
+        'mousemove',
+        '--window',
+        String(nativeWindowId),
+        String(Math.round(bounds.x + point.x)),
+        String(Math.round(bounds.y + point.y))
+      )
+      nativeInput('click', '1')
 
       const destinationTab = orcaPage.locator('[data-tab-id]').filter({ hasText: 'image.png' })
       await expect(destinationTab).toBeVisible()
@@ -62,27 +127,7 @@ test.describe('Image link focus', () => {
         )
         .toBe(true)
       await expect(destinationWebview).toBeFocused()
-      // Guest input verifies close forwarding; native OS keyboard routing needs a visible isolated display.
-      await orcaPage.evaluate((isMac) => {
-        const webview = document.activeElement
-        if (
-          !webview ||
-          !('sendInputEvent' in webview) ||
-          typeof webview.sendInputEvent !== 'function'
-        ) {
-          throw new Error('No browser guest has DOM focus')
-        }
-        webview.sendInputEvent({
-          type: 'keyDown',
-          keyCode: 'W',
-          modifiers: [isMac ? 'meta' : 'control']
-        })
-        webview.sendInputEvent({
-          type: 'keyUp',
-          keyCode: 'W',
-          modifiers: [isMac ? 'meta' : 'control']
-        })
-      }, process.platform === 'darwin')
+      nativeInput('key', '--clearmodifiers', 'ctrl+w')
 
       await expect(destinationTab).toHaveCount(0)
       await expect(sourceTab).toBeVisible()
