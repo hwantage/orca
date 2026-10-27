@@ -4,6 +4,8 @@ import { test, expect } from './helpers/orca-app'
 import { startBrowserLinkServer } from './helpers/browser-link-server'
 import { getActiveWorktreeId } from './helpers/store'
 
+test.use({ launchEnv: { ORCA_BACKGROUND_LAUNCH: '1' } })
+
 test.describe('Image link focus', () => {
   test.skip(
     process.platform !== 'linux' ||
