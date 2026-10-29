@@ -4,7 +4,6 @@ import type { SpawnDeferralReason } from '../../../../../shared/host-spawn-admis
 import { isRemoteRuntimePtyId } from '../../../../../shared/remote-runtime/remote-runtime-pty-id'
 import { useAppStore } from '@/store'
 import { hasWorktreeTeardownStarted } from '@/store/slices/worktree-delete-state-types'
-import { PROCESS_BOUNDARY_GROUND } from '../../../../../shared/terminal-mode-reset-profiles'
 import { hasPtySerializer } from '../pty-buffer-serializer'
 import { writeTerminalOutput } from '@/lib/pane-manager/pane-terminal-output-scheduler'
 
@@ -61,7 +60,7 @@ export function bindStartFreshSpawn(session: ConnectPanePtySession): void {
     // Cancelled replay can retain isUserScrolling; replacement shells must start following output.
     session.resetFreshSpawnFollowOutput()
     // Fresh processes cannot inherit the previous TUI’s screen or mouse/Kitty modes.
-    session.writeInputModeGround(PROCESS_BOUNDARY_GROUND)
+    session.groundInputModesForNewProcess()
     session.prepareFreshShellViewportForSpawn(options)
     const coldRestoreOverride =
       startupOverride && 'launchConfig' in startupOverride
@@ -110,10 +109,10 @@ export function bindStartFreshSpawn(session: ConnectPanePtySession): void {
       ...(coldRestoreOverride ? { launchToken: coldRestoreOverride.launchToken } : {}),
       ...(coldRestoreOverride ? { launchAgent: coldRestoreOverride.agent } : {}),
       ...(session.shouldDeclareHiddenAtSpawn() ? { initiallyHidden: true } : {}),
-      resumeSpawnIntent: visibleAtSpawn ? 'user-resume' : 'automatic-restore',
-      ...(session.pendingReplacedPtyId
-        ? { claimReplacedPtyId: session.claimPendingReplacedPtyId }
-        : {}),
+      // Why: a restart swaps one live session for one, and main stops the old PTY before admission.
+      resumeSpawnIntent:
+        visibleAtSpawn || session.userRestart ? 'user-resume' : 'automatic-restore',
+      ...(session.userRestart ? { claimReplacedPtyId: session.claimPendingReplacedPtyId } : {}),
       shouldContinue: () =>
         !session.disposed &&
         (findTerminalTabForPane(useAppStore.getState(), session.deps.worktreeId, session.deps.tabId)
@@ -151,12 +150,15 @@ export function bindStartFreshSpawn(session: ConnectPanePtySession): void {
           session.enterSpawnDeferredSleep(deferral, startupOverride, options, visibleAtSpawn)
           return null
         }
+        // Only the restart's deferred retries are the user's; a later wake is automatic again.
+        session.userRestart = false
         const connectResult =
           spawnedPtyId && typeof spawnedPtyId === 'object' && 'id' in spawnedPtyId
             ? spawnedPtyId
             : null
         // Legacy replies may omit incarnationId; remote evidence remains unverifiable until a stamped attach result.
         session.remotePtyIncarnationId = connectResult?.incarnationId ?? null
+        session.noteBoundProcessIncarnation(connectResult?.incarnationId)
         if (connectResult?.isReattach) {
           if (
             session.pendingStartupCommand?.resumeSource === effectiveStartup?.resumeSource &&

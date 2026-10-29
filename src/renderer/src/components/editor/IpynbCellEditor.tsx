@@ -17,6 +17,7 @@ import type { IpynbCell } from './ipynb-parse'
 import { MarkdownPreviewBody } from './MarkdownPreviewBody'
 import { useMonacoColorizedLines } from './MonacoCodeExcerpt'
 import { useDocumentDarkTheme } from '@/hooks/use-document-dark-theme'
+import { useMonacoTheme } from '@/hooks/use-monaco-theme'
 
 const NO_MARKDOWN_COMPONENTS: Components = {}
 // Share preview/editor box metrics to avoid shifts on activation.
@@ -40,6 +41,8 @@ export function IpynbMarkdownCell({ source }: { source: string }): React.JSX.Ele
 }
 
 type IpynbCellSourceProps = {
+  /** Null for cells without a stable id, whose position-based key can move to another cell. */
+  modelKey: string | null
   cell: IpynbCell
   source: string
   active: boolean
@@ -143,6 +146,7 @@ function IpynbCodePreview({
 }
 
 function IpynbSourceEditor({
+  modelKey,
   cell,
   source,
   pressedAt,
@@ -151,7 +155,7 @@ function IpynbSourceEditor({
 }: IpynbCellSourceProps & { pressedAt: ClientPoint | null }): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const editorFontZoomLevel = useAppStore((s) => s.editorFontZoomLevel)
-  const isDark = useDocumentDarkTheme()
+  const monacoTheme = useMonacoTheme()
   const fontFamily = resolveEditorFontStack(settings)
   const fontSize = computeEditorFontSize(settings?.terminalFontSize ?? 13, editorFontZoomLevel)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -165,8 +169,8 @@ function IpynbSourceEditor({
   }, [onChange, onDeactivate])
 
   useLayoutEffect(() => {
-    monaco.editor.setTheme(isDark ? 'vs-dark' : 'vs')
-  }, [isDark])
+    monaco.editor.setTheme(monacoTheme)
+  }, [monacoTheme])
 
   // Create before paint to avoid placeholders and guessed caret geometry; retain the model and undo history across external reloads.
   useLayoutEffect(() => {
@@ -175,7 +179,16 @@ function IpynbSourceEditor({
       return
     }
     const { lineHeight, paddingX, paddingY } = CODE_LAYOUT
-    const model = monaco.editor.createModel(source, cell.language)
+    // Monaco restores undo for disposed models with this scheme; no other Monaco feature special-cases it.
+    const uri =
+      modelKey === null
+        ? null
+        : monaco.Uri.from({ scheme: 'vscode-userdata', path: `/${modelKey}` })
+    const model = monaco.editor.createModel(
+      source,
+      cell.language,
+      uri && !monaco.editor.getModel(uri) ? uri : undefined
+    )
     const editorInstance = monaco.editor.create(container, {
       dropIntoEditor: { enabled: false },
       model,

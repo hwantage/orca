@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WindowsProcessEvidence } from '../daemon/daemon-incarnation-evidence-types'
 import {
   buildWslDistroHolderArgs,
+  buildWslDistroHolderScript,
   isWslDistroHolderCommandLine,
   WSL_DISTRO_HOLDER_MARKER
 } from './wsl-distro-holder-command'
@@ -112,9 +113,12 @@ describe('holder command line', () => {
       '--exec',
       '/bin/sh',
       '-c',
-      'while :; do sleep 3600; done',
+      buildWslDistroHolderScript(),
       WSL_DISTRO_HOLDER_MARKER
     ])
+    // A holder that slept an hour between looks would keep an idle distro up that long.
+    expect(buildWslDistroHolderScript()).toContain('sleep 15\n')
+    expect(buildWslDistroHolderScript()).not.toContain('infinity')
   })
 
   it('matches only our holder for the same distro', () => {
@@ -138,6 +142,42 @@ describe('createWslDistroHolder', () => {
     )
     expect(saved).toMatchObject({ version: 1, distro: 'Alpine', pid: 4000, creationTimeMs: 5_000 })
     expect(await holder.holderState('Alpine')).toBe('live')
+  })
+
+  it('a background ensure re-reads the running list right before spawning, and never boots (E9)', async () => {
+    const holder = makeHolder()
+    const requireRunning = vi.fn(async () => false)
+    await expect(holder.ensureHeld('Alpine', { requireRunning })).rejects.toThrow('isn’t running')
+    expect(requireRunning).toHaveBeenCalledTimes(1)
+    expect(host.spawned).toEqual([])
+
+    requireRunning.mockResolvedValue(true)
+    expect((await holder.ensureHeld('Alpine', { requireRunning })).outcome).toBe('spawned')
+    expect(host.spawned).toEqual(['Alpine'])
+  })
+
+  it('a user ensure is not refused by a background one in flight for a stopped distro', async () => {
+    const holder = makeHolder()
+    const asked = vi.fn(async () => false)
+    const background = holder.ensureHeld('Alpine', { requireRunning: asked })
+    const user = holder.ensureHeld('Alpine')
+    await expect(background).rejects.toThrow('isn’t running')
+    // The user's own act may start the distro.
+    expect((await user).outcome).toBe('spawned')
+    expect(host.spawned).toEqual(['Alpine'])
+  })
+
+  it('a holder exiting with code 1 notes its distro may have stopped (E9)', async () => {
+    const noteMayHaveStopped = vi.fn()
+    const holder = makeHolder({ noteMayHaveStopped })
+    await holder.ensureHeld('Alpine')
+    host.children[0]?.emit('exit', 0, null)
+    expect(noteMayHaveStopped).not.toHaveBeenCalled()
+
+    await holder.release('Alpine')
+    await holder.ensureHeld('Alpine')
+    host.children[1]?.emit('exit', 1, null)
+    expect(noteMayHaveStopped).toHaveBeenCalledWith('Alpine')
   })
 
   it('single-flights concurrent ensures for one distro', async () => {

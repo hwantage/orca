@@ -1,3 +1,4 @@
+import { assertStructuredAgentResolutionCurrent } from '../native-chat/structured-agent-command-resolution'
 import { activeProviderContext } from '../../shared/agent-session-provider-context'
 import { getClaudeProfileRouter } from '../claude-accounts/claude-profile-installed-router'
 import { requireLegacyAgentSessionAccountHome } from '../../shared/agent-session-account-home'
@@ -23,7 +24,7 @@ import {
   type ClaudeEnvDeps
 } from './claude-structured-child-env'
 import { claudeStructuredLaunchArgs } from './claude-structured-launch-args'
-import type { ClaudeCliFlagSupport } from './claude-cli-flag-support'
+import type { ClaudeCliFlagCheck, ClaudeCliFlagSupport } from './claude-cli-flag-support'
 import { resolveClaudeLaunchFlags } from './claude-structured-launch-flags'
 import { withNativeChatVisualsEnv } from '../native-chat/native-chat-visuals-delivery'
 import {
@@ -31,13 +32,11 @@ import {
   resolveClaudeStructuredLaunchHome
 } from './claude-structured-launch-home'
 import type { StructuredAgentLaunchPartResolver } from '../runtime/structured-agent-launch-composition'
-import { claudeSessionIdForOrcaSession } from './claude-structured-session-id'
+import { claudeSessionIdForOrcaSession } from './structured/claude-structured-session-id'
 import {
   pendingAgentSessionRewindFork,
   type AgentSessionRewindFork
 } from '../../shared/agent-session-rewind'
-
-export { claudeSessionIdForOrcaSession }
 
 export const CLAUDE_DEFAULT_SETTING_SOURCES = ['user', 'project', 'local'] as const
 export const CLAUDE_SESSION_STATE_EVENTS_ENV = 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS'
@@ -109,6 +108,8 @@ export type ClaudeStructuredLaunch = {
   resumeLeafUuid: string | null
   /** Whether this launch resumes an existing Claude transcript. */
   resumesTranscript: boolean
+  /** Version-gated flag and control support of the CLI this launch runs. */
+  cliFlag: ClaudeCliFlagCheck
   /** Chain identity is independent of whether a transcript exists to resume. */
   continuesChain: boolean
   /** Chain head replaced by this rewind fork. */
@@ -123,7 +124,7 @@ export type ClaudeStructuredLaunchPartDeps = {
   /** Host attachment store outside the workspace, granted to the agent at launch. */
   attachmentDirectory?: string
   /** Omit version-gated flags when support cannot be checked. */
-  cliFlags?: Pick<ClaudeCliFlagSupport, 'supports'>
+  cliFlags?: Pick<ClaudeCliFlagSupport, 'check'>
   /** Whether Claude wrote a transcript for this id; defaults to the transcript resolver. */
   hasTranscript?: (input: {
     providerSessionId: string
@@ -146,7 +147,11 @@ export async function resolveClaudeStructuredInvocation(
   options?: Parameters<typeof claudeChildEnv>[2]
 ): Promise<ClaudeStructuredInvocation> {
   const sources = resolvedSources ?? (await resolveClaudeChildEnvSources(deps))
+  assertStructuredAgentResolutionCurrent(deps.operation)
+  deps.signal?.throwIfAborted()
   const auth = await deps.resolveAuthPolicy()
+  assertStructuredAgentResolutionCurrent(deps.operation)
+  deps.signal?.throwIfAborted()
   // Preserve proxy credentials alongside ANTHROPIC_BASE_URL for every account.
   return {
     command: sources.command,
@@ -271,6 +276,8 @@ export function claudeStructuredLaunchPart(
         providerSessionId,
         resumeLeafUuid: resumesTranscript ? leafUuid : null,
         resumesTranscript,
+        cliFlag: async (flag, ...budget) =>
+          deps.cliFlags ? deps.cliFlags.check(flag, probeLaunch, ...budget) : 'unknown',
         continuesChain,
         ...(fork && head && !continuesChain
           ? { forkedFromKey: agentSessionProviderHandleKey(head) }

@@ -115,6 +115,14 @@ export class StructuredAgentSessionAdapterRouter implements StructuredAgentSessi
   holdsDispatch = (sessionId: string): boolean =>
     this.liveOwnerOrNull(sessionId)?.holdsDispatch?.(sessionId) ?? false
 
+  liveTurnId = (sessionId: string): string | null | undefined =>
+    this.liveOwnerOrNull(sessionId)?.liveTurnId?.(sessionId)
+
+  requiresModelTransitionRestart: NonNullable<
+    StructuredAgentSessionAdapter['requiresModelTransitionRestart']
+  > = (input) =>
+    this.liveOwnerOrNull(input.sessionId)?.requiresModelTransitionRestart?.(input) ?? false
+
   capturePendingOutput: StructuredAgentSessionAdapter['capturePendingOutput'] = (input) =>
     this.liveOwnerOrNull(input.sessionId)?.capturePendingOutput?.(input)
 
@@ -158,11 +166,11 @@ export class StructuredAgentSessionAdapterRouter implements StructuredAgentSessi
   setOption: StructuredAgentSessionAdapter['setOption'] = (input) =>
     this.owner(input.sessionId).setOption(input)
 
+  readAppliedInputOptions: StructuredAgentSessionAdapter['readAppliedInputOptions'] = (input) =>
+    this.liveOwnerOrNull(input.sessionId)?.readAppliedInputOptions?.(input) ?? null
+
   projectOptions: StructuredAgentSessionAdapter['projectOptions'] = (sessionId, options) =>
     this.liveOwnerOrNull(sessionId)?.projectOptions?.(sessionId, options)
-
-  prepareReadOptions = (input: { sessionId: string; fence: number }) =>
-    this.liveOwnerOrNull(input.sessionId)?.prepareReadOptions?.(input)
 
   readOptions = (input: { sessionId: string; fence: number }) => {
     const reader = this.owner(input.sessionId).readOptions
@@ -172,8 +180,13 @@ export class StructuredAgentSessionAdapterRouter implements StructuredAgentSessi
     return reader(input)
   }
 
-  readOptionRestoreFailures = (sessionId: string): readonly string[] =>
-    this.owner(sessionId).readOptionRestoreFailures?.(sessionId) ?? []
+  generateText: NonNullable<StructuredAgentSessionAdapter['generateText']> = (input) => {
+    const { adapter } = this.requireAgent(input)
+    if (!adapter.generateText) {
+      return Promise.reject(new Error(`${input.agent} cannot run an independent text task`))
+    }
+    return adapter.generateText(input)
+  }
 
   copyConversation: NonNullable<StructuredAgentSessionAdapter['copyConversation']> = (input) => {
     const { adapter } = this.requireAgent(input.identity)
@@ -296,7 +309,9 @@ export class StructuredAgentSessionAdapterRouter implements StructuredAgentSessi
     return route?.state === 'live' ? route.registration.adapter : null
   }
 
-  private requireAgent(identity: AgentSessionJournalIdentity): StructuredAgentRegistration {
+  private requireAgent(
+    identity: Pick<AgentSessionJournalIdentity, 'agent'>
+  ): StructuredAgentRegistration {
     const registration = this.agents.registration(identity.agent)
     if (!registration) {
       throw new Error(`structured sessions do not support ${identity.agent}`)
